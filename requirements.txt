@@ -1,0 +1,7 @@
+streamlit>=1.32.0
+--find-links https://download.pytorch.org/whl/torch_stable.html
+torch>=2.0.0
+numpy>=1.26.0
+matplotlib>=3.8.0
+mne>=1.6.1
+python-dotenv>=1.0.0
