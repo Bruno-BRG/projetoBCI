@@ -1,8 +1,11 @@
+import os
 import mne
 from mne.io import concatenate_raws
 import torch
 import torch.nn as nn
 import torch.utils.data as data
+from torch.utils.data import TensorDataset, DataLoader
+import torch.optim as optim
 import numpy as np
 import math
 from torch.utils.tensorboard import SummaryWriter
@@ -184,7 +187,70 @@ def load_and_process_data(subject_id=1, augment=True):
         baseline=None,
         preload=True
     )
-    X = (epoched.get_data() * 1e3).astype(np.float32)
+    X = (epoched.get_data() * 1e3).astype(np.float64)  # Changed to float64
+    y = (epoched.events[:, 2] - 2).astype(np.int64)
+    
+    if augment:
+        # Apply data augmentation
+        augmented_X = EEGAugmentation.augment_data(X)
+        # Combine original and augmented data
+        X = np.concatenate([X, augmented_X], axis=0)
+        y = np.concatenate([y, np.repeat(y, augmented_X.shape[0] // y.shape[0])])
+    
+    return X, y, EEG_CHANNEL
+
+def load_local_eeg_data(subject_id=1, augment=True):
+    """Load EEG data from local files in eeg_data folder"""
+    base_path = os.path.join('eeg_data', 'MNE-eegbci-data', 'files', 'eegmmidb', '1.0.0', f'S{subject_id:03d}')
+    runs = [4, 8, 12]  # Motor imagery: hands vs feet
+    
+    # Find the EDF files for the specified runs
+    edf_files = []
+    for run in runs:
+        file_pattern = f'S{subject_id:03d}R{run:02d}.edf'
+        file_path = os.path.join(base_path, file_pattern)
+        if os.path.exists(file_path):
+            edf_files.append(file_path)
+        else:
+            raise FileNotFoundError(f"EEG data file not found: {file_path}")
+    
+    # Load and concatenate the EDF files
+    parts = [
+        mne.io.read_raw_edf(
+            path,
+            preload=True,
+            stim_channel='auto',
+            verbose='WARNING',
+        )
+        for path in edf_files
+    ]
+    raw = concatenate_raws(parts)
+    events, _ = mne.events_from_annotations(raw)
+
+    # Get EEG channels
+    eeg_channel_inds = mne.pick_types(
+        raw.info,
+        meg=False,
+        eeg=True,
+        stim=False,
+        eog=False,
+        exclude='bads',
+    )
+
+    EEG_CHANNEL = int(len(eeg_channel_inds))
+    epoched = mne.Epochs(
+        raw,
+        events,
+        dict(left=2, right=3),
+        tmin=1,
+        tmax=4.1,
+        proj=False,
+        picks=eeg_channel_inds,
+        baseline=None,
+        preload=True
+    )
+    
+    X = (epoched.get_data() * 1e3).astype(np.float64)  # Changed to float64
     y = (epoched.events[:, 2] - 2).astype(np.int64)
     
     if augment:
@@ -209,9 +275,18 @@ class ModelTracker:
         self.val_losses = []
         self.train_accuracies = []
         self.val_accuracies = []
+        
+        # Create directory for saving plots
+        self.plot_dir = "training_plots"
+        if not os.path.exists(self.plot_dir):
+            os.makedirs(self.plot_dir)
 
     def log_metrics(self, phase: str, loss: float, predictions: torch.Tensor, labels: torch.Tensor, epoch: int):
         """Log metrics for a training/validation phase"""
+        # Ensure predictions and labels have the same shape
+        predictions = predictions.view(-1)  # Flatten predictions
+        labels = labels.view(-1)  # Flatten labels
+        
         # Convert predictions to binary classes
         pred_classes = (predictions > 0.5).float().cpu().numpy()
         true_labels = labels.cpu().numpy()
@@ -242,30 +317,49 @@ class ModelTracker:
             self.writer.add_figure(f'{phase}/Confusion_Matrix', fig, epoch)
             plt.close()
 
-    def plot_training_history(self):
-        """Plot training history"""
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10))
-        
-        epochs = range(1, len(self.train_losses) + 1)
+        # Save plots after each epoch
+        self.save_training_plots()
+
+    def save_training_plots(self):
+        """Save training and validation plots"""
+        # Create figure with two subplots
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 12))
+        fig.suptitle('Training Metrics', fontsize=16, y=0.95)
         
         # Plot losses
-        ax1.plot(epochs, self.train_losses, 'b-', label='Training Loss')
-        ax1.plot(epochs, self.val_losses, 'r-', label='Validation Loss')
+        epochs = range(1, len(self.train_losses) + 1)
+        ax1.plot(epochs, self.train_losses, 'b-', label='Training Loss', linewidth=2)
+        if len(self.val_losses) > 0:
+            ax1.plot(epochs, self.val_losses, 'r-', label='Validation Loss', linewidth=2)
         ax1.set_title('Training and Validation Loss')
         ax1.set_xlabel('Epoch')
         ax1.set_ylabel('Loss')
+        ax1.grid(True)
         ax1.legend()
         
         # Plot accuracies
-        ax2.plot(epochs, self.train_accuracies, 'b-', label='Training Accuracy')
-        ax2.plot(epochs, self.val_accuracies, 'r-', label='Validation Accuracy')
+        ax2.plot(epochs, self.train_accuracies, 'b-', label='Training Accuracy', linewidth=2)
+        if len(self.val_accuracies) > 0:
+            ax2.plot(epochs, self.val_accuracies, 'r-', label='Validation Accuracy', linewidth=2)
         ax2.set_title('Training and Validation Accuracy')
         ax2.set_xlabel('Epoch')
         ax2.set_ylabel('Accuracy')
+        ax2.grid(True)
         ax2.legend()
         
+        # Adjust layout and save
         plt.tight_layout()
-        return fig
+        plt.savefig(os.path.join(self.plot_dir, 'training_metrics.png'))
+        plt.close()
+
+    def plot_training_history(self):
+        """Plot training history"""
+        # Load and return the saved plot
+        img_path = os.path.join(self.plot_dir, 'training_metrics.png')
+        if os.path.exists(img_path):
+            return plt.imread(img_path)
+        else:
+            return self.save_training_plots()
 
 def train_epoch(model: nn.Module, 
                 dataloader: torch.utils.data.DataLoader,
@@ -292,6 +386,14 @@ def train_epoch(model: nn.Module,
 
         with torch.set_grad_enabled(phase == 'train'):
             outputs = model(inputs)
+            outputs = outputs.squeeze()
+            
+            # Handle single sample case
+            if outputs.dim() == 0:
+                outputs = outputs.unsqueeze(0)
+            if labels.dim() == 0:
+                labels = labels.unsqueeze(0)
+                
             loss = criterion(outputs, labels.float())
 
             if phase == 'train':
@@ -299,12 +401,14 @@ def train_epoch(model: nn.Module,
                 optimizer.step()
 
         running_loss += loss.item()
-        all_preds.extend(outputs.detach())
-        all_labels.extend(labels.detach())
+        all_preds.append(outputs.detach().cpu())
+        all_labels.append(labels.detach().cpu())
 
     epoch_loss = running_loss / len(dataloader)
-    epoch_preds = torch.stack(all_preds)
-    epoch_labels = torch.stack(all_labels)
+    
+    # Stack tensors properly, handling single-item batches
+    epoch_preds = torch.cat([p.view(-1) for p in all_preds])
+    epoch_labels = torch.cat([l.view(-1) for l in all_labels])
 
     return epoch_loss, epoch_preds, epoch_labels
 
@@ -345,6 +449,7 @@ class BCISystem:
     def initialize_model(self, eeg_channel):
         self.eeg_channel = eeg_channel
         self.model = EEGClassificationModel(eeg_channel=eeg_channel, dropout=0.125)
+        self.model = self.model.double()  # Convert model to double precision
         self.model.to(self.device)
         if self.model_path and os.path.exists(self.model_path):
             self.model.load_state_dict(torch.load(self.model_path))
@@ -371,32 +476,50 @@ class BCISystem:
         X = np.concatenate([X, X_aug], axis=0)
         y = np.concatenate([y, y_aug])
 
-        # Prepara os dados para treinamento
-        X_tensor = torch.DoubleTensor(X)
-        y_tensor = torch.DoubleTensor(y)
-        dataset = TensorDataset(X_tensor, y_tensor)
-        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+        # Split data into train and validation sets
+        train_size = int(0.8 * len(X))
+        indices = torch.randperm(len(X))
+        train_indices = indices[:train_size]
+        val_indices = indices[train_size:]
 
-        # Configuração do treinamento
+        # Create train and validation datasets
+        X_train, y_train = X[train_indices], y[train_indices]
+        X_val, y_val = X[val_indices], y[val_indices]
+
+        # Prepare data loaders
+        train_dataset = TensorDataset(torch.DoubleTensor(X_train), torch.DoubleTensor(y_train))
+        val_dataset = TensorDataset(torch.DoubleTensor(X_val), torch.DoubleTensor(y_val))
+        
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        val_loader = DataLoader(val_dataset, batch_size=batch_size)
+
+        # Initialize training components
         criterion = nn.BCEWithLogitsLoss()
         optimizer = optim.Adam(self.model.parameters(), lr=learning_rate)
+        tracker = ModelTracker(log_dir="training_runs")
 
-        # Treina o modelo
-        self.model.train()
+        # Training loop
         for epoch in range(num_epochs):
-            running_loss = 0.0
-            for inputs, labels in dataloader:
-                inputs, labels = inputs.to(self.device), labels.to(self.device)
-                optimizer.zero_grad()
-                outputs = self.model(inputs)
-                loss = criterion(outputs.squeeze(), labels)
-                loss.backward()
-                optimizer.step()
-                running_loss += loss.item()
+            # Training phase
+            train_loss, train_preds, train_labels = train_epoch(
+                self.model, train_loader, criterion, optimizer, 
+                self.device, 'train', tracker
+            )
+            tracker.log_metrics('train', train_loss, train_preds, train_labels, epoch)
+
+            # Validation phase
+            with torch.no_grad():
+                val_loss, val_preds, val_labels = train_epoch(
+                    self.model, val_loader, criterion, None,
+                    self.device, 'val', tracker
+                )
+                tracker.log_metrics('val', val_loss, val_preds, val_labels, epoch)
 
         self.is_calibrated = True
         if self.model_path:
             torch.save(self.model.state_dict(), self.model_path)
+            
+        return tracker.plot_training_history()
 
     def predict_movement(self, eeg_data):
         """Prediz o movimento imaginado a partir dos dados de EEG"""
