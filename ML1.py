@@ -332,3 +332,86 @@ def evaluate_model(model: nn.Module,
         'classification_report': classification_report(all_labels, pred_classes),
         'confusion_matrix': confusion_matrix(all_labels, pred_classes)
     }
+
+class BCISystem:
+    def __init__(self, model_path=None):
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.model = None
+        self.eeg_channel = None
+        self.calibration_data = {'X': [], 'y': []}
+        self.is_calibrated = False
+        self.model_path = model_path
+
+    def initialize_model(self, eeg_channel):
+        self.eeg_channel = eeg_channel
+        self.model = EEGClassificationModel(eeg_channel=eeg_channel, dropout=0.125)
+        self.model.to(self.device)
+        if self.model_path and os.path.exists(self.model_path):
+            self.model.load_state_dict(torch.load(self.model_path))
+            self.is_calibrated = True
+
+    def add_calibration_sample(self, eeg_data, label):
+        """Adiciona uma amostra de calibração"""
+        self.calibration_data['X'].append(eeg_data)
+        self.calibration_data['y'].append(label)
+
+    def train_calibration(self, num_epochs=10, batch_size=32, learning_rate=1e-3):
+        """Treina o modelo com os dados de calibração"""
+        if len(self.calibration_data['X']) < 10:
+            raise ValueError("Necessário pelo menos 10 amostras de calibração")
+
+        X = np.array(self.calibration_data['X'])
+        y = np.array(self.calibration_data['y'])
+
+        # Aplica data augmentation nos dados de calibração
+        X_aug = EEGAugmentation.augment_data(X)
+        y_aug = np.repeat(y, X_aug.shape[0] // y.shape[0])
+
+        # Combina dados originais e aumentados
+        X = np.concatenate([X, X_aug], axis=0)
+        y = np.concatenate([y, y_aug])
+
+        # Prepara os dados para treinamento
+        X_tensor = torch.DoubleTensor(X)
+        y_tensor = torch.DoubleTensor(y)
+        dataset = TensorDataset(X_tensor, y_tensor)
+        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+
+        # Configuração do treinamento
+        criterion = nn.BCEWithLogitsLoss()
+        optimizer = optim.Adam(self.model.parameters(), lr=learning_rate)
+
+        # Treina o modelo
+        self.model.train()
+        for epoch in range(num_epochs):
+            running_loss = 0.0
+            for inputs, labels in dataloader:
+                inputs, labels = inputs.to(self.device), labels.to(self.device)
+                optimizer.zero_grad()
+                outputs = self.model(inputs)
+                loss = criterion(outputs.squeeze(), labels)
+                loss.backward()
+                optimizer.step()
+                running_loss += loss.item()
+
+        self.is_calibrated = True
+        if self.model_path:
+            torch.save(self.model.state_dict(), self.model_path)
+
+    def predict_movement(self, eeg_data):
+        """Prediz o movimento imaginado a partir dos dados de EEG"""
+        if not self.is_calibrated:
+            raise ValueError("Sistema precisa ser calibrado primeiro")
+
+        self.model.eval()
+        with torch.no_grad():
+            input_tensor = torch.DoubleTensor(eeg_data).unsqueeze(0).to(self.device)
+            output = self.model(input_tensor)
+            prediction = "Left" if output.item() < 0.5 else "Right"
+            confidence = abs(output.item() - 0.5) * 2
+            confidence = min(1.0, confidence)  # Limita a confiança a 100%
+            return prediction, confidence
+
+def create_bci_system(model_path="checkpoints/bci_model.pth"):
+    """Cria uma nova instância do sistema BCI"""
+    return BCISystem(model_path=model_path)
