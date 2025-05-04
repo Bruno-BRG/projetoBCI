@@ -521,6 +521,37 @@ class BCISystem:
             
         return tracker.plot_training_history()
 
+    def process_lsl_data(self, eeg_data):
+        """Process incoming LSL data in real-time
+        
+        Args:
+            eeg_data (numpy.ndarray): Raw EEG data from LSL stream [channels x samples]
+        
+        Returns:
+            tuple: (prediction, confidence) where prediction is 'Left' or 'Right'
+                  and confidence is a float between 0 and 1
+        """
+        if not self.is_calibrated:
+            raise ValueError("System must be calibrated before processing real-time data")
+            
+        # Ensure data is in the correct format
+        if len(eeg_data.shape) == 1:
+            eeg_data = eeg_data.reshape(1, -1)
+        
+        # Process data in chunks that match the model's expected input
+        chunk_size = 160  # Assuming 1 second of data at 160Hz
+        if eeg_data.shape[1] > chunk_size:
+            eeg_data = eeg_data[:, -chunk_size:]
+        elif eeg_data.shape[1] < chunk_size:
+            # Pad with zeros if we don't have enough data
+            pad_width = ((0, 0), (0, chunk_size - eeg_data.shape[1]))
+            eeg_data = np.pad(eeg_data, pad_width, mode='constant')
+            
+        # Apply same preprocessing as training data
+        eeg_data = (eeg_data - eeg_data.mean()) / (eeg_data.std() + 1e-8)
+        
+        return self.predict_movement(eeg_data)
+
     def predict_movement(self, eeg_data):
         """Prediz o movimento imaginado a partir dos dados de EEG"""
         if not self.is_calibrated:
@@ -528,13 +559,39 @@ class BCISystem:
 
         self.model.eval()
         with torch.no_grad():
-            input_tensor = torch.DoubleTensor(eeg_data).unsqueeze(0).to(self.device)
+            # Handle both single samples and batches
+            if len(eeg_data.shape) == 2:
+                eeg_data = eeg_data.reshape(1, *eeg_data.shape)
+            
+            input_tensor = torch.DoubleTensor(eeg_data).to(self.device)
             output = self.model(input_tensor)
             prediction = "Left" if output.item() < 0.5 else "Right"
             confidence = abs(output.item() - 0.5) * 2
-            confidence = min(1.0, confidence)  # Limita a confiança a 100%
+            confidence = min(1.0, max(0.0, confidence))  # Clip confidence to [0, 1]
             return prediction, confidence
 
+    def validate_signal_quality(self, eeg_data):
+        """Validate the quality of incoming EEG signals
+        
+        Args:
+            eeg_data (numpy.ndarray): Raw EEG data [channels x samples]
+            
+        Returns:
+            bool: True if signal quality is acceptable, False otherwise
+        """
+        # Check for flat lines
+        if np.any(np.std(eeg_data, axis=1) < 0.1):
+            return False
+            
+        # Check for extreme values
+        if np.any(np.abs(eeg_data) > 500):  # microvolts
+            return False
+            
+        # Check for NaN or inf values
+        if np.any(np.isnan(eeg_data)) or np.any(np.isinf(eeg_data)):
+            return False
+            
+        return True
 def create_bci_system(model_path="checkpoints/bci_model.pth"):
     """Cria uma nova instância do sistema BCI"""
     return BCISystem(model_path=model_path)
