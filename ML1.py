@@ -327,10 +327,11 @@ class ModelTracker:
         fig.suptitle('Training Metrics', fontsize=16, y=0.95)
         
         # Plot losses
-        epochs = range(1, len(self.train_losses) + 1)
-        ax1.plot(epochs, self.train_losses, 'b-', label='Training Loss', linewidth=2)
+        train_epochs = range(1, len(self.train_losses) + 1)
+        ax1.plot(train_epochs, self.train_losses, 'b-', label='Training Loss', linewidth=2)
         if len(self.val_losses) > 0:
-            ax1.plot(epochs, self.val_losses, 'r-', label='Validation Loss', linewidth=2)
+            val_epochs = range(1, len(self.val_losses) + 1)
+            ax1.plot(val_epochs, self.val_losses, 'r-', label='Validation Loss', linewidth=2)
         ax1.set_title('Training and Validation Loss')
         ax1.set_xlabel('Epoch')
         ax1.set_ylabel('Loss')
@@ -338,9 +339,10 @@ class ModelTracker:
         ax1.legend()
         
         # Plot accuracies
-        ax2.plot(epochs, self.train_accuracies, 'b-', label='Training Accuracy', linewidth=2)
+        ax2.plot(train_epochs, self.train_accuracies, 'b-', label='Training Accuracy', linewidth=2)
         if len(self.val_accuracies) > 0:
-            ax2.plot(epochs, self.val_accuracies, 'r-', label='Validation Accuracy', linewidth=2)
+            val_acc_epochs = range(1, len(self.val_accuracies) + 1)
+            ax2.plot(val_acc_epochs, self.val_accuracies, 'r-', label='Validation Accuracy', linewidth=2)
         ax2.set_title('Training and Validation Accuracy')
         ax2.set_xlabel('Epoch')
         ax2.set_ylabel('Accuracy')
