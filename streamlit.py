@@ -1,405 +1,287 @@
-# First import asyncio and set policy before any other imports
+# Handle OpenMP thread issues
+import os
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
+
+# Import asyncio first and set policy
 import asyncio
 import platform
 if platform.system() == 'Windows':
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-import os
-os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
-
-# Import required modules before session state initialization
 import streamlit as st
-import matplotlib
-matplotlib.use('Agg')  # Required for streamlit
-import matplotlib.pyplot as plt
-plt.style.use('dark_background')  # Use dark theme for plots
-
-from collections import deque
-import queue
-import time
-import threading
-import numpy as np
-import seaborn as sns
-import pandas as pd
 import torch
-from torch.utils.data import DataLoader, TensorDataset
-import torch.nn as nn
-import torch.optim as optim
-from pylsl import StreamInlet, resolve_streams
+import numpy as np
 from ML1 import create_bci_system, load_local_eeg_data
+from pylsl import StreamInlet, resolve_streams
+import plotly.graph_objects as go
+from collections import deque
+import time
+import matplotlib.pyplot as plt
 
-# Configure device and visualization settings
+# Force torch to use CPU for stability
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 torch.set_num_threads(1)
 
-# EEG visualization settings
-CHANNEL_COLORS = [
-    '#4B0082',  # Purple
-    '#0000FF',  # Blue
-    '#00FF00',  # Green
-    '#FFFF00',  # Yellow
-    '#FFA500',  # Orange
-    '#FF0000',  # Red
-    '#FF69B4',  # Pink
-    '#808080',  # Gray
-    '#800080',  # Deep Purple
-    '#000080',  # Navy Blue
-    '#008000',  # Dark Green
-    '#FFD700',  # Gold
-    '#FF4500',  # Orange Red
-    '#DC143C',  # Crimson
-    '#FF1493',  # Deep Pink
-    '#A9A9A9',  # Dark Gray
-]
-
-# Initialize all session state variables
-if 'initialized' not in st.session_state:
-    st.session_state.initialized = True
-    # System state
+# Initialize session state variables
+if 'bci_system' not in st.session_state:
     st.session_state.bci_system = create_bci_system()
+if 'mode' not in st.session_state:
     st.session_state.mode = 'calibration'
-    st.session_state.calibration_count = 0
-    
-    # Data state
+if 'is_streaming' not in st.session_state:
+    st.session_state.is_streaming = False
+if 'inlet' not in st.session_state:
+    st.session_state.inlet = None
+if 'channel_data' not in st.session_state:
+    st.session_state.channel_data = None
+if 'figure' not in st.session_state:
+    st.session_state.figure = None
+if 'plot_placeholder' not in st.session_state:
+    st.session_state.plot_placeholder = None
+if 'last_update' not in st.session_state:
+    st.session_state.last_update = time.time()
+if 'current_data' not in st.session_state:
     st.session_state.current_data = None
+if 'current_labels' not in st.session_state:
     st.session_state.current_labels = None
+if 'current_sample_idx' not in st.session_state:
     st.session_state.current_sample_idx = 0
+if 'eeg_channel' not in st.session_state:
     st.session_state.eeg_channel = None
-    
-    # Streaming state
-    st.session_state.lsl_stream = None
-    st.session_state.streaming = False
-    st.session_state.stop_streaming = False
-    st.session_state.eeg_buffer = deque(maxlen=2000)  # Increased buffer size
-    st.session_state.prediction_buffer = deque(maxlen=100)
-    st.session_state.stream_data_queue = queue.Queue()
-    st.session_state.auto_scale = True
-    st.session_state.scale_factor = 1.0
-    st.session_state.display_channels = list(range(16))  # Show all channels by default
+if 'calibration_count' not in st.session_state:
+    st.session_state.calibration_count = 0
+if 'time_vector' not in st.session_state:
+    st.session_state.time_vector = None
+if 'plot_container' not in st.session_state:
+    st.session_state.plot_container = st.empty()
+if 'fig_dict' not in st.session_state:
+    st.session_state.fig_dict = None
 
-# Rest of the application code
 st.title("Sistema BCI para Reabilitação Pós-AVC")
 
 # Seleção de modo
 st.sidebar.header("Configuração")
-mode = st.sidebar.radio("Modo de Operação", ['Calibração', 'Uso Real', 'Streaming OpenBCI'])
-st.session_state.mode = 'streaming' if mode == 'Streaming OpenBCI' else ('calibration' if mode == 'Calibração' else 'real_use')
+mode = st.sidebar.radio("Modo de Operação", ['Calibração', 'Uso Real', 'Streaming'])
+if mode == 'Calibração':
+    st.session_state.mode = 'calibration'
+elif mode == 'Uso Real':
+    st.session_state.mode = 'real_use'
+else:
+    st.session_state.mode = 'streaming'
+
+# Parâmetros de calibração no sidebar
+if st.session_state.mode == 'calibration':
+    st.sidebar.markdown("---")
+    st.sidebar.header("Parâmetros de Calibração")
+    subject_id = st.sidebar.number_input("ID do Paciente", 1, 109, 1)
+    num_epochs = st.sidebar.slider("Épocas de Treinamento", 5, 30, 10)
+    learning_rate = st.sidebar.slider("Taxa de Aprendizado", 1e-5, 1e-2, 1e-3, format="%.5f")
+    batch_size = st.sidebar.slider("Tamanho do Lote", 1, 32, 4)  # Changed batch size range and default
+    min_samples = st.sidebar.number_input("Amostras Mínimas para Calibração", 10, 100, 20)
+
+    # Botão para carregar dados
+    if st.sidebar.button("Carregar Dados do Paciente"):
+        try:
+            with st.spinner("Carregando dados do EEG..."):
+                X, y, eeg_channel = load_local_eeg_data(subject_id=subject_id, augment=False)
+                st.session_state.current_data = X
+                st.session_state.current_labels = y
+                st.session_state.current_sample_idx = 0
+                st.session_state.eeg_channel = eeg_channel
+                st.success(f"Dados carregados com sucesso! Total de amostras: {len(X)}")
+        except Exception as e:
+            st.error(f"Erro ao carregar dados: {str(e)}")
+
+# LSL Stream Settings in sidebar
+if st.session_state.mode == 'streaming':
+    st.sidebar.markdown("---")
+    st.sidebar.header("LSL Stream Settings")
+    window_size = st.sidebar.slider("Window Size (seconds)", 1, 10, 5)
+    update_interval = st.sidebar.slider("Update Interval (ms)", 50, 500, 100)
 
 def init_lsl_stream():
     """Initialize LSL stream connection"""
     try:
-        print("Looking for an EEG stream...")
-        # Get all available streams first
-        streams = resolve_streams()
-        
-        st.markdown("### Available LSL Streams:")
-        if not streams:
-            st.error("No LSL streams found at all! Is your OpenBCI GUI running?")
-            return None
-            
-        # Show all available streams
-        for idx, stream in enumerate(streams):
-            st.markdown(f"{idx + 1}. Name: {stream.name()}, Type: {stream.type()}, Channel Count: {stream.channel_count()}")
-        
-        # Filter for EEG streams
+        streams = resolve_streams(wait_time=1.0)
         eeg_streams = [stream for stream in streams if stream.type() == 'EEG']
-        
         if not eeg_streams:
-            st.error("No EEG streams found! Make sure OpenBCI GUI is streaming via LSL and the stream type is set to 'EEG'")
             return None
-            
-        # Connect to the first available EEG stream
-        selected_stream = eeg_streams[0]
-        inlet = StreamInlet(selected_stream)
-        
-        # Show detailed stream information
-        st.success(f"""Connected to LSL stream:
-        - Name: {selected_stream.name()}
-        - Type: {selected_stream.type()}
-        - Channel count: {selected_stream.channel_count()}
-        - Sampling rate: {selected_stream.nominal_srate()} Hz
-        - Source ID: {selected_stream.source_id()}
-        """)
-        
+        inlet = StreamInlet(eeg_streams[0])
         return inlet
     except Exception as e:
         st.error(f"Error connecting to LSL stream: {str(e)}")
-        st.exception(e)  # Show full error traceback
         return None
 
-def process_eeg_chunk(chunk, timestamps):
-    """Process incoming EEG data chunk"""
-    if st.session_state.bci_system and st.session_state.bci_system.is_calibrated:
-        # Prepare data for model
-        data = np.array(chunk).T  # Transpose to match expected shape
-        prediction, confidence = st.session_state.bci_system.predict_movement(data)
-        st.session_state.prediction_buffer.append((prediction, confidence))
+def create_empty_figure(n_channels, window_size, sample_rate=250):
+    """Create an empty Plotly figure for streaming"""
+    fig = go.Figure()
+    times = np.linspace(-window_size, 0, int(window_size * sample_rate))
+    st.session_state.time_vector = times
     
-    # Store raw data
-    for i, sample in enumerate(chunk):
-        st.session_state.eeg_buffer.append((timestamps[i], sample))
-
-def streaming_worker():
-    """Background worker for LSL streaming"""
-    while st.session_state.streaming:
-        if st.session_state.lsl_stream:
-            chunk, timestamps = st.session_state.lsl_stream.pull_chunk()
-            if chunk:
-                process_eeg_chunk(chunk, timestamps)
-        time.sleep(0.1)  # Small delay to prevent CPU overload
-
-def safe_streaming_worker():
-    """Thread-safe background worker for LSL streaming"""
-    try:
-        print("Starting streaming worker...")
-        while not st.session_state.stop_streaming:
-            if st.session_state.lsl_stream:
-                # Use a smaller timeout to be more responsive
-                chunk, timestamps = st.session_state.lsl_stream.pull_chunk(timeout=0.1)
-                if chunk:
-                    # Log receiving data
-                    print(f"Received chunk of size: {len(chunk)} samples x {len(chunk[0])} channels")
-                    # Put data in queue instead of directly processing
-                    st.session_state.stream_data_queue.put((chunk, timestamps))
-                else:
-                    print("No data received in this iteration")
-            time.sleep(0.01)  # Smaller sleep time for better responsiveness
-    except Exception as e:
-        print(f"Streaming worker error: {str(e)}")
-        st.error(f"Streaming worker error: {str(e)}")
-    finally:
-        print("Streaming worker stopped")
-
-def create_eeg_figure(data, num_samples=500, auto_scale=True, scale_factor=1.0):
-    """Create a matplotlib figure for EEG visualization"""
-    plt.close('all')  # Close any existing plots
-    fig, ax = plt.subplots(figsize=(12, 8), facecolor='black')
-    ax.set_facecolor('black')
+    for i in range(n_channels):
+        fig.add_trace(go.Scatter(
+            x=times,
+            y=np.zeros_like(times),
+            name=f'Channel {i+1}',
+            mode='lines'
+        ))
     
-    # Calculate vertical spacing for channels
-    num_channels = len(st.session_state.display_channels)
-    channel_spacing = 2.0
-    offsets = np.arange(num_channels) * channel_spacing
-    
-    # Auto-scaling calculation
-    if auto_scale and len(data) > 0:
-        max_amp = np.max(np.abs(data))
-        if max_amp > 0:
-            scale_factor = (channel_spacing * 0.4) / max_amp
-    
-    # Plot each channel
-    for idx, ch in enumerate(st.session_state.display_channels):
-        if ch < data.shape[1]:  # Make sure channel exists in data
-            signal = data[-num_samples:, ch] * scale_factor
-            ax.plot(signal + offsets[idx], 
-                   color=CHANNEL_COLORS[ch], 
-                   label=f'Ch{ch+1}',
-                   linewidth=1,
-                   alpha=0.8)
-    
-    # Customize plot appearance
-    ax.set_ylim(-channel_spacing, num_channels * channel_spacing)
-    ax.set_xlim(0, num_samples)
-    ax.grid(True, color='#333333', linestyle='-', alpha=0.3)
-    
-    # Add channel labels
-    for idx, ch in enumerate(st.session_state.display_channels):
-        ax.text(-50, offsets[idx], f'Ch{ch+1}', 
-                color=CHANNEL_COLORS[ch], 
-                va='center',
-                fontsize=8)
-    
-    # Customize ticks and labels
-    ax.tick_params(colors='white', labelsize=8)
-    for spine in ax.spines.values():
-        spine.set_color('#333333')
-    
-    ax.set_title("Real-time EEG", color='white', pad=20, fontsize=12)
-    ax.set_xlabel("Time (s)", color='white', fontsize=10)
-    ax.set_ylabel("Channels", color='white', fontsize=10)
-    
-    # Add time markers
-    time_points = np.linspace(0, num_samples, 6)
-    time_labels = [f"-{i}s" for i in range(5, -1, -1)]
-    ax.set_xticks(time_points)
-    ax.set_xticklabels(time_labels, color='white')
-    
-    # Adjust layout
-    plt.tight_layout()
+    fig.update_layout(
+        title='Real-time EEG Data',
+        xaxis_title='Time (s)',
+        yaxis_title='Amplitude (µV)',
+        showlegend=True,
+        uirevision='constant',  # Prevents zooming reset on updates
+        height=600,
+        xaxis=dict(
+            range=[-window_size, 0],
+            showgrid=True,
+            gridwidth=1,
+            gridcolor='LightGrey',
+        ),
+        yaxis=dict(
+            range=[-100, 100],
+            showgrid=True,
+            gridwidth=1,
+            gridcolor='LightGrey',
+        ),
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+    )
+    fig.update_layout(
+        updatemenus=[{
+            'buttons': [
+                {'args': [None, {'frame': {'duration': 0, 'redraw': False},
+                                'fromcurrent': True,
+                                'mode': 'immediate',
+                                'transition': {'duration': 0}}],
+                 'label': 'Play',
+                 'method': 'animate'}
+            ],
+            'direction': 'left',
+            'pad': {'r': 10, 't': 10},
+            'showactive': False,
+            'type': 'buttons',
+            'x': 0.1,
+            'y': 0,
+            'xanchor': 'right'
+        }],
+    )
     return fig
 
-# Streaming Interface
-if st.session_state.mode == 'streaming':
-    st.header("OpenBCI Streaming Mode")
-    
-    # Add OpenBCI LSL Configuration Instructions
-    with st.expander("OpenBCI LSL Configuration Instructions"):
-        st.markdown("""
-        ### How to configure OpenBCI GUI for LSL streaming:
-        1. Open OpenBCI GUI
-        2. Connect to your device
-        3. Click on Networking Widget
-        4. Select "LSL" from the dropdown
-        5. Set Stream Type to "EEG"
-        6. Click "Start" in the LSL widget
-        7. Then click "Start Streaming" below
-        """)
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        if not st.session_state.streaming:
-            if st.button("Start Streaming"):
-                st.session_state.lsl_stream = init_lsl_stream()
-                if st.session_state.lsl_stream:
-                    st.session_state.streaming = True
-                    st.session_state.stop_streaming = False
-                    # Clear buffers when starting new stream
-                    st.session_state.eeg_buffer.clear()
-                    st.session_state.prediction_buffer.clear()
-                    st.session_state.stream_data_queue = queue.Queue()
-                    threading.Thread(target=safe_streaming_worker, daemon=True).start()
-        else:
-            if st.button("Stop Streaming"):
-                st.session_state.stop_streaming = True
-                st.session_state.streaming = False
-                if st.session_state.lsl_stream:
-                    st.session_state.lsl_stream = None
-                st.warning("Streaming stopped")
-    
-    with col2:
-        update_interval = st.slider("Update Interval (ms)", 100, 1000, 500)
-    
-    # Add debug metrics
-    debug_metrics = st.empty()
-    
-    # Create two columns for EEG and predictions
-    col1, col2 = st.columns(2)
-    
-    # Real-time EEG plot placeholder
-    with col1:
-        st.subheader("Raw EEG Signal")
-        eeg_plot = st.empty()
-        
-    # Real-time predictions placeholder
-    with col2:
-        st.subheader("Movement Predictions")
-        prediction_plot = st.empty()
-        confidence_plot = st.empty()
-    
-    # Process data from queue and update plots
-    if st.session_state.streaming:
-        placeholder = st.empty()
-        with placeholder.container():
-            try:
-                # Update debug metrics more frequently
-                with debug_metrics.container():
-                    st.markdown("### Debug Information")
-                    st.markdown(f"""
-                    - Buffer size: {len(st.session_state.eeg_buffer)} samples
-                    - Queue size: {st.session_state.stream_data_queue.qsize()} chunks
-                    - Last update: {time.strftime('%H:%M:%S')}
-                    - Streaming active: {st.session_state.streaming}
-                    - Stop flag: {st.session_state.stop_streaming}
-                    """)
-                
-                # Process all available data in queue
-                data_received = False
-                while not st.session_state.stream_data_queue.empty():
-                    chunk, timestamps = st.session_state.stream_data_queue.get_nowait()
-                    if chunk:  # Only process if we actually got data
-                        process_eeg_chunk(chunk, timestamps)
-                        data_received = True
-                
-                # Plot EEG data if we have any
-                if len(st.session_state.eeg_buffer) > 0:
-                    # Convert buffer to numpy array, handling tuple unpacking
-                    buffer_data = list(st.session_state.eeg_buffer)
-                    timestamps, samples = zip(*buffer_data)
-                    data = np.array(samples)
-                    
-                    # Create and display the EEG plot
-                    fig = create_eeg_figure(
-                        data,
-                        num_samples=500,
-                        auto_scale=st.session_state.auto_scale,
-                        scale_factor=st.session_state.scale_factor
-                    )
-                    eeg_plot.pyplot(fig)
-                    plt.close(fig)  # Clean up
-                
-                # Update predictions if available
-                if len(st.session_state.prediction_buffer) > 0:
-                    predictions, confidences = zip(*list(st.session_state.prediction_buffer))
-                    
-                    # Show latest prediction
-                    latest_pred = predictions[-1]
-                    latest_conf = confidences[-1]
-                    
-                    # Format prediction display
-                    prediction_color = "#00ff00" if latest_conf > 0.7 else "#ffff00"
-                    prediction_plot.markdown(
-                        f"<div style='text-align: center; padding: 10px; background-color: {prediction_color}; border-radius: 5px;'>"
-                        f"<h3>Current Prediction:</h3>"
-                        f"<h2>{latest_pred}</h2>"
-                        "</div>",
-                        unsafe_allow_html=True
-                    )
-                    
-                    # Show confidence bar
-                    confidence_plot.progress(latest_conf)
-                    confidence_plot.markdown(f"Confidence: {latest_conf:.2%}")
-                
-                # Add debug information
-                st.markdown("---")
-                st.markdown("### Debug Information")
-                st.markdown(f"Buffer size: {len(st.session_state.eeg_buffer)} samples")
-                st.markdown(f"Last update: {time.strftime('%H:%M:%S')}")
-                
-                time.sleep(update_interval / 1000)
-                st.rerun()
-                
-            except Exception as e:
-                st.error(f"Error processing stream data: {str(e)}")
-                st.exception(e)  # This will show the full traceback
-            
-    # Visualization controls in sidebar for streaming mode
-    if st.session_state.mode == 'streaming':
-        with st.sidebar:
-            st.markdown("### Visualization Settings")
-            st.session_state.auto_scale = st.checkbox("Auto Scale", value=True)
-            if not st.session_state.auto_scale:
-                st.session_state.scale_factor = st.slider("Manual Scale", 0.1, 10.0, 1.0, 0.1)
-            
-            # Channel display settings
-            st.markdown("### Channel Display")
-            all_channels = st.checkbox("Show All Channels", value=True)
-            if not all_channels:
-                st.session_state.display_channels = st.multiselect(
-                    "Select Channels",
-                    options=list(range(16)),
-                    default=list(range(8)),
-                    format_func=lambda x: f"Channel {x+1}"
-                )
-            else:
-                st.session_state.display_channels = list(range(16))
-                
-            # Update rate control
-            st.markdown("### Display Settings")
-            st.session_state.update_rate = st.slider(
-                "Update Rate (Hz)", 
-                min_value=1, 
-                max_value=60, 
-                value=20
-            )
-            st.session_state.time_window = st.slider(
-                "Time Window (s)", 
-                min_value=1, 
-                max_value=10, 
-                value=5
-            )
+def update_streaming_plot():
+    """Update the streaming plot with new data"""
+    if not st.session_state.is_streaming or not st.session_state.inlet:
+        return
 
-# Original calibration and real use modes continue below
-elif st.session_state.mode == 'calibration':
+    # Get chunk of data
+    try:
+        chunk, timestamps = st.session_state.inlet.pull_chunk(timeout=0.0, max_samples=32)
+        
+        if chunk:
+            # Update channel data
+            for sample in chunk:
+                for i, value in enumerate(sample):
+                    st.session_state.channel_data[i].append(value)
+            
+            # Create new figure with updated data
+            fig = go.Figure()
+            
+            # Add traces for each channel
+            times = np.linspace(-window_size, 0, len(next(iter(st.session_state.channel_data))))
+            for i, channel_data in enumerate(st.session_state.channel_data):
+                fig.add_trace(go.Scatter(
+                    x=times,
+                    y=list(channel_data),
+                    name=f'Channel {i+1}',
+                    mode='lines'
+                ))
+            
+            # Update layout
+            fig.update_layout(
+                title='Real-time EEG Data',
+                xaxis_title='Time (s)',
+                yaxis_title='Amplitude (µV)',
+                showlegend=True,
+                uirevision=True,
+                height=600,
+                xaxis=dict(
+                    range=[-window_size, 0],
+                    showgrid=True,
+                    gridwidth=1,
+                    gridcolor='LightGrey',
+                ),
+                yaxis=dict(
+                    range=[-100, 100],
+                    showgrid=True,
+                    gridwidth=1,
+                    gridcolor='LightGrey',
+                ),
+                plot_bgcolor='white',
+                paper_bgcolor='white',
+            )
+            
+            # Update the plot in the designated placeholder
+            return fig
+            
+    except Exception as e:
+        st.error(f"Error updating plot: {str(e)}")
+        st.session_state.is_streaming = False
+        return None
+
+def initialize_figure_dict(n_channels, window_size, sample_rate=250):
+    """Initialize the figure dictionary for efficient updates"""
+    # Create time vector
+    times = np.linspace(-window_size, 0, int(window_size * sample_rate))
+    
+    # Initialize traces for each channel
+    traces = []
+    for i in range(n_channels):
+        trace = {
+            'type': 'scatter',
+            'x': times,
+            'y': np.zeros_like(times),
+            'name': f'Channel {i+1}',
+            'mode': 'lines',
+        }
+        traces.append(trace)
+    
+    # Create the layout
+    layout = {
+        'title': 'Real-time EEG Data',
+        'xaxis': {
+            'title': 'Time (s)',
+            'range': [-window_size, 0],
+            'showgrid': True,
+            'gridwidth': 1,
+            'gridcolor': 'LightGrey'
+        },
+        'yaxis': {
+            'title': 'Amplitude (µV)',
+            'range': [-100, 100],
+            'showgrid': True,
+            'gridwidth': 1,
+            'gridcolor': 'LightGrey'
+        },
+        'showlegend': True,
+        'uirevision': True,
+        'height': 600,
+        'plot_bgcolor': 'white',
+        'paper_bgcolor': 'white',
+        'margin': {'l': 60, 'r': 20, 't': 40, 'b': 40}
+    }
+    
+    return {'data': traces, 'layout': layout}
+
+def update_figure_dict(fig_dict, channel_data):
+    """Update figure dictionary with new data"""
+    times = np.linspace(-window_size, 0, len(next(iter(channel_data))))
+    for i, data in enumerate(channel_data):
+        fig_dict['data'][i]['x'] = times
+        fig_dict['data'][i]['y'] = list(data)
+    return fig_dict
+
+# Main content area
+if st.session_state.mode == 'calibration':
     st.header("Modo de Calibração")
     st.markdown("""
     Neste modo, você irá selecionar amostras dos dados gravados para treinar o sistema.
@@ -412,14 +294,14 @@ elif st.session_state.mode == 'calibration':
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            if st.button("Amostra Anterior"):
+            if st.button("Amostra Anterior", key="prev_sample_calibration"):
                 st.session_state.current_sample_idx = max(0, st.session_state.current_sample_idx - 1)
                 
         with col2:
             st.write(f"Amostra atual: {st.session_state.current_sample_idx + 1}/{len(st.session_state.current_data)}")
             
         with col3:
-            if st.button("Próxima Amostra"):
+            if st.button("Próxima Amostra", key="next_sample_calibration"):
                 st.session_state.current_sample_idx = min(
                     len(st.session_state.current_data) - 1,
                     st.session_state.current_sample_idx + 1
@@ -439,7 +321,7 @@ elif st.session_state.mode == 'calibration':
 
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("Usar para Calibração"):
+            if st.button("Usar para Calibração", key="use_for_calibration"):
                 st.session_state.bci_system.add_calibration_sample(
                     current_sample,
                     current_label
@@ -449,7 +331,7 @@ elif st.session_state.mode == 'calibration':
 
         # Inicializar/Treinar modelo
         if st.session_state.calibration_count >= min_samples:
-            if st.button("Treinar Modelo"):
+            if st.button("Treinar Modelo", key="train_model"):
                 try:
                     with st.spinner("Treinando o modelo..."):
                         if not st.session_state.bci_system.model:
@@ -466,7 +348,7 @@ elif st.session_state.mode == 'calibration':
         else:
             st.warning(f"Necessário mais {min_samples - st.session_state.calibration_count} amostras para treinar")
 
-else:
+elif st.session_state.mode == 'real_use':
     st.header("Modo de Uso Real")
     if not st.session_state.bci_system.is_calibrated:
         st.error("Sistema precisa ser calibrado primeiro! Mude para o modo de calibração.")
@@ -481,20 +363,20 @@ else:
             col1, col2, col3 = st.columns(3)
             
             with col1:
-                if st.button("Amostra Anterior "):
+                if st.button("Amostra Anterior ", key="prev_sample_real_use"):
                     st.session_state.current_sample_idx = max(0, st.session_state.current_sample_idx - 1)
                     
             with col2:
                 st.write(f"Amostra atual: {st.session_state.current_sample_idx + 1}/{len(st.session_state.current_data)}")
                 
             with col3:
-                if st.button("Próxima Amostra "):
+                if st.button("Próxima Amostra ", key="next_sample_real_use"):
                     st.session_state.current_sample_idx = min(
                         len(st.session_state.current_data) - 1,
                         st.session_state.current_sample_idx + 1
                     )
 
-            if st.button("Classificar Movimento"):
+            if st.button("Classificar Movimento", key="classify_movement"):
                 try:
                     current_sample = st.session_state.current_data[st.session_state.current_sample_idx]
                     current_label = st.session_state.current_labels[st.session_state.current_sample_idx]
@@ -529,6 +411,48 @@ else:
                     st.error(f"Erro durante a classificação: {str(e)}")
         else:
             st.warning("Carregue os dados do paciente primeiro usando o menu lateral")
+
+elif st.session_state.mode == 'streaming':
+    st.header("OpenBCI LSL Stream")
+    
+    # Create placeholders for dynamic content
+    plot_placeholder = st.empty()
+    status_placeholder = st.empty()
+    
+    # Stream control buttons
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        if not st.session_state.is_streaming:
+            if st.button("Start Stream", key="start_stream"):
+                inlet = init_lsl_stream()
+                if inlet:
+                    info = inlet.info()
+                    n_channels = info.channel_count()
+                    sample_rate = int(info.nominal_srate())
+                    buffer_size = int(window_size * sample_rate)
+                    
+                    # Initialize streaming state
+                    st.session_state.channel_data = [deque(maxlen=buffer_size) for _ in range(n_channels)]
+                    st.session_state.inlet = inlet
+                    st.session_state.is_streaming = True
+                    st.session_state.last_update = time.time()
+                    
+                    status_placeholder.success(f"Connected to {info.name()} stream with {n_channels} channels")
+                else:
+                    status_placeholder.error("No LSL streams found! Please ensure OpenBCI is streaming data.")
+        else:
+            if st.button("Stop Stream", key="stop_stream"):
+                st.session_state.is_streaming = False
+                st.session_state.inlet = None
+                st.session_state.channel_data = None
+                status_placeholder.info("Stream stopped")
+    
+    # Update visualization
+    if st.session_state.is_streaming:
+        fig = update_streaming_plot()
+        if fig is not None:
+            plot_placeholder.plotly_chart(fig, use_container_width=True)
+            time.sleep(update_interval / 1000.0)
 
 # Mostrar métricas e estatísticas
 if st.session_state.bci_system.is_calibrated:

@@ -1,0 +1,276 @@
+import sys
+from PyQt5.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QPushButton, QLabel, QStackedWidget, QFileDialog, QListWidget, QInputDialog
+)
+from PyQt5.QtCore import Qt, pyqtSignal, QThread, QObject, QTimer
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+import matplotlib.pyplot as plt
+from ML1 import load_local_eeg_data, create_bci_system
+from pylsl import StreamInlet, resolve_streams
+
+class CalibrationWidget(QWidget):
+    """Widget for calibration mode: load data, navigate samples, add to calibration, and train model"""  
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout()
+        self.load_button = QPushButton("Load EEG Data")
+        self.prev_button = QPushButton("Previous Sample")
+        self.next_button = QPushButton("Next Sample")
+        self.add_button = QPushButton("Add to Calibration")
+        self.train_button = QPushButton("Train Model")
+        # Plot area
+        self.figure = plt.Figure(figsize=(5,3)) if False else plt.figure()
+        self.canvas = FigureCanvas(self.figure)
+        layout.addWidget(self.canvas)
+        layout.addWidget(self.load_button)
+        layout.addWidget(self.prev_button)
+        layout.addWidget(self.next_button)
+        layout.addWidget(self.add_button)
+        layout.addWidget(self.train_button)
+        self.setLayout(layout)
+        # Data storage
+        self.data = None
+        self.labels = None
+        self.idx = 0
+        self.eeg_channel = None
+        self.bci = create_bci_system()
+        # Connect signals
+        self.load_button.clicked.connect(self.load_data)
+        self.prev_button.clicked.connect(self.prev_sample)
+        self.next_button.clicked.connect(self.next_sample)
+        self.add_button.clicked.connect(self.add_to_calibration)
+        self.train_button.clicked.connect(self.train_model)
+
+    def load_data(self):
+        subject_id, ok = QInputDialog.getInt(self, "Subject ID", "Enter Subject ID:", 1, 1, 109)
+        if not ok:
+            return
+        X, y, ch = load_local_eeg_data(subject_id, augment=False)
+        self.data, self.labels, self.eeg_channel = X, y, ch
+        self.idx = 0
+        self.update_plot()
+
+    def update_plot(self):
+        self.figure.clear()
+        ax = self.figure.add_subplot(111)
+        sample = self.data[self.idx]
+        for ch in range(sample.shape[0]):
+            ax.plot(sample[ch], alpha=0.5)
+        ax.set_title(f"Sample {self.idx+1}/{len(self.data)} - Label: {self.labels[self.idx]}")
+        ax.set_xlabel("Time")
+        ax.set_ylabel("Amplitude")
+        self.canvas.draw()
+
+    def prev_sample(self):
+        if self.data is None:
+            return
+        self.idx = max(0, self.idx - 1)
+        self.update_plot()
+
+    def next_sample(self):
+        if self.data is None:
+            return
+        self.idx = min(len(self.data)-1, self.idx + 1)
+        self.update_plot()
+
+    def add_to_calibration(self):
+        if self.data is None:
+            return
+        self.bci.add_calibration_sample(self.data[self.idx], int(self.labels[self.idx]))
+
+    def train_model(self):
+        if self.bci and self.eeg_channel:
+            self.bci.initialize_model(self.eeg_channel)
+            # Launch training in separate thread or directly
+            self.bci.train_calibration(num_epochs=10, batch_size=4, learning_rate=1e-3)
+            # Could display training plot
+
+class RealUseWidget(QWidget):
+    """Widget for real-use mode: navigate samples, classify, and stream LSL"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout()
+        self.load_button = QPushButton("Load EEG Data")
+        self.prev_button = QPushButton("Previous Sample")
+        self.next_button = QPushButton("Next Sample")
+        self.classify_button = QPushButton("Classify Movement")
+        # Plot area
+        self.figure = plt.figure()
+        self.canvas = FigureCanvas(self.figure)
+        # Result labels
+        self.true_label_label = QLabel("True: N/A")
+        self.pred_label_label = QLabel("Predicted: N/A")
+        self.confidence_label = QLabel("Confidence: N/A")
+        # Streaming controls (to be implemented)
+        self.stream_start_button = QPushButton("Start Stream")
+        self.stream_stop_button = QPushButton("Stop Stream")
+        # Add widgets
+        layout.addWidget(self.load_button)
+        layout.addWidget(self.canvas)
+        layout.addWidget(self.true_label_label)
+        layout.addWidget(self.pred_label_label)
+        layout.addWidget(self.confidence_label)
+        hl = QHBoxLayout()
+        hl.addWidget(self.prev_button)
+        hl.addWidget(self.next_button)
+        hl.addWidget(self.classify_button)
+        layout.addLayout(hl)
+        layout.addWidget(self.stream_start_button)
+        layout.addWidget(self.stream_stop_button)
+        self.setLayout(layout)
+        # Data storage
+        self.data = None
+        self.labels = None
+        self.idx = 0
+        self.eeg_channel = None
+        self.bci = create_bci_system()
+        # Connect signals
+        self.load_button.clicked.connect(self.load_data)
+        self.prev_button.clicked.connect(self.prev_sample)
+        self.next_button.clicked.connect(self.next_sample)
+        self.classify_button.clicked.connect(self.classify_movement)
+        # Stream signals (to implement)
+
+    def load_data(self):
+        subject_id, ok = QInputDialog.getInt(self, "Subject ID", "Enter Subject ID:", 1, 1, 109)
+        if not ok:
+            return
+        X, y, ch = load_local_eeg_data(subject_id, augment=False)
+        self.data, self.labels, self.eeg_channel = X, y, ch
+        self.idx = 0
+        # Initialize model with channel count
+        self.bci.initialize_model(self.eeg_channel)
+        self.update_plot()
+
+    def update_plot(self):
+        self.figure.clear()
+        ax = self.figure.add_subplot(111)
+        sample = self.data[self.idx]
+        for ch in range(sample.shape[0]):
+            ax.plot(sample[ch], alpha=0.5)
+        ax.set_title(f"Sample {self.idx+1}/{len(self.data)} - True: {'Left' if self.labels[self.idx]==0 else 'Right'}")
+        ax.set_xlabel("Time")
+        ax.set_ylabel("Amplitude")
+        self.canvas.draw()
+
+    def prev_sample(self):
+        if self.data is None:
+            return
+        self.idx = max(0, self.idx - 1)
+        self.update_plot()
+
+    def next_sample(self):
+        if self.data is None:
+            return
+        self.idx = min(len(self.data)-1, self.idx + 1)
+        self.update_plot()
+
+    def classify_movement(self):
+        if self.data is None or not self.bci.is_calibrated:
+            return
+        sample = self.data[self.idx]
+        pred, conf = self.bci.predict_movement(sample)
+        self.true_label_label.setText(f"True: {'Left' if self.labels[self.idx]==0 else 'Right'}")
+        self.pred_label_label.setText(f"Predicted: {pred}")
+        self.confidence_label.setText(f"Confidence: {conf:.2%}")
+
+class StreamingWidget(QWidget):
+    """Widget for live LSL streaming and real-time EEG plotting"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout()
+        # Plot area
+        self.figure = plt.figure()
+        self.canvas = FigureCanvas(self.figure)
+        # Control buttons
+        self.start_btn = QPushButton("Start Streaming")
+        self.stop_btn = QPushButton("Stop Streaming")
+        self.stop_btn.setEnabled(False)
+        layout.addWidget(self.canvas)
+        btn_layout = QHBoxLayout()
+        btn_layout.addWidget(self.start_btn)
+        btn_layout.addWidget(self.stop_btn)
+        layout.addLayout(btn_layout)
+        self.setLayout(layout)
+        # LSL inlet and buffer
+        self.inlet = None
+        self.buffer = None
+        self.timer = QTimer(self)
+        self.timer.setInterval(100)  # ms
+        # Signals
+        self.start_btn.clicked.connect(self.start_stream)
+        self.stop_btn.clicked.connect(self.stop_stream)
+        self.timer.timeout.connect(self.update_plot)
+
+    def start_stream(self):
+        streams = resolve_streams(wait_time=1.0)
+        eeg_streams = [s for s in streams if s.type() == 'EEG']
+        if eeg_streams:
+            self.inlet = StreamInlet(eeg_streams[0])
+            info = self.inlet.info()
+            n_ch = info.channel_count()
+            sr = int(info.nominal_srate())
+            buf_len = sr * 5
+            from collections import deque
+            self.buffer = [deque(maxlen=buf_len) for _ in range(n_ch)]
+            self.start_btn.setEnabled(False)
+            self.stop_btn.setEnabled(True)
+            self.timer.start()
+
+    def stop_stream(self):
+        self.timer.stop()
+        self.inlet = None
+        self.buffer = None
+        self.start_btn.setEnabled(True)
+        self.stop_btn.setEnabled(False)
+
+    def update_plot(self):
+        if not self.inlet: return
+        chunk, _ = self.inlet.pull_chunk(timeout=0.0, max_samples=32)
+        if chunk:
+            for sample in chunk:
+                for i, val in enumerate(sample):
+                    self.buffer[i].append(val)
+            self.figure.clear()
+            ax = self.figure.add_subplot(111)
+            for ch_data in self.buffer:
+                ax.plot(list(ch_data), alpha=0.7)
+            ax.set_title("Live EEG Stream")
+            ax.set_xlabel("Samples")
+            ax.set_ylabel("Amplitude")
+            self.canvas.draw()
+
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("BCI System for Post-Stroke Rehabilitation")
+        self.resize(1200, 800)
+
+        # Central widget with stacked layout for modes
+        self.stacked = QStackedWidget()
+        self.calib_widget = CalibrationWidget()
+        self.real_widget = RealUseWidget()
+        self.stream_widget = StreamingWidget()
+        self.stacked.addWidget(self.calib_widget)
+        self.stacked.addWidget(self.real_widget)
+        self.stacked.addWidget(self.stream_widget)
+        self.setCentralWidget(self.stacked)
+
+        # Toolbar for mode selection
+        self.toolbar = self.addToolBar("Mode")
+        self.calib_action = self.toolbar.addAction("Calibration")
+        self.real_action = self.toolbar.addAction("Real Use")
+        self.stream_action = self.toolbar.addAction("Streaming")
+        self.calib_action.triggered.connect(lambda: self.switch_mode(0))
+        self.real_action.triggered.connect(lambda: self.switch_mode(1))
+        self.stream_action.triggered.connect(lambda: self.switch_mode(2))
+
+    def switch_mode(self, index: int):
+        self.stacked.setCurrentIndex(index)
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    win = MainWindow()
+    win.show()
+    sys.exit(app.exec_())
