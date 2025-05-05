@@ -4,6 +4,8 @@ from PyQt5.QtWidgets import (
     QPushButton, QLabel, QStackedWidget, QFileDialog, QListWidget, QInputDialog,
     QScrollArea
 )
+from PyQt5.QtGui import QPalette, QColor
+from PyQt5.QtWidgets import QStyleFactory
 from PyQt5.QtCore import Qt, pyqtSignal, QThread, QObject, QTimer
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 import matplotlib.pyplot as plt
@@ -304,6 +306,42 @@ class MainWindow(QMainWindow):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    # Set Fusion style for consistency
+    app.setStyle(QStyleFactory.create('Fusion'))
+    # Dark palette
+    dark_palette = QPalette()
+    dark_palette.setColor(QPalette.Window, QColor(53,53,53))
+    dark_palette.setColor(QPalette.WindowText, QColor(255,255,255))
+    dark_palette.setColor(QPalette.Base, QColor(25,25,25))
+    dark_palette.setColor(QPalette.AlternateBase, QColor(53,53,53))
+    dark_palette.setColor(QPalette.ToolTipBase, QColor(255,255,255))
+    dark_palette.setColor(QPalette.ToolTipText, QColor(255,255,255))
+    dark_palette.setColor(QPalette.Text, QColor(255,255,255))
+    dark_palette.setColor(QPalette.Button, QColor(53,53,53))
+    dark_palette.setColor(QPalette.ButtonText, QColor(255,255,255))
+    dark_palette.setColor(QPalette.BrightText, QColor(255,0,0))
+    app.setPalette(dark_palette)
+    # Global style sheet
+    app.setStyleSheet("""
+        QPushButton {
+            min-height: 36px;
+            font-size: 14px;
+            background-color: #29a19c;
+            color: #ffffff;
+            border-radius: 6px;
+            margin: 4px;
+        }
+        QPushButton:disabled {
+            background-color: #555555;
+        }
+        QLabel {
+            font-size: 14px;
+            margin: 2px;
+        }
+        QScrollArea, QWidget {
+            background-color: #2e2e2e;
+        }
+    """)
     win = MainWindow()
     win.show()
     sys.exit(app.exec_())
