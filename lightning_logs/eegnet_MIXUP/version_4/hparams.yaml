@@ -1,3 +1,0 @@
-channels: 64
-dropout_rate: 0.125
-n_classes: 2
