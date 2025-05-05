@@ -1,7 +1,8 @@
 import sys
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QLabel, QStackedWidget, QFileDialog, QListWidget, QInputDialog
+    QPushButton, QLabel, QStackedWidget, QFileDialog, QListWidget, QInputDialog,
+    QScrollArea
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QThread, QObject, QTimer
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -180,14 +181,17 @@ class StreamingWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = QVBoxLayout()
-        # Plot area
+        # Plot area with scrollable canvas
         self.figure = plt.figure()
         self.canvas = FigureCanvas(self.figure)
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setWidget(self.canvas)
         # Control buttons
         self.start_btn = QPushButton("Start Streaming")
         self.stop_btn = QPushButton("Stop Streaming")
         self.stop_btn.setEnabled(False)
-        layout.addWidget(self.canvas)
+        layout.addWidget(self.scroll)
         btn_layout = QHBoxLayout()
         btn_layout.addWidget(self.start_btn)
         btn_layout.addWidget(self.stop_btn)
@@ -197,7 +201,7 @@ class StreamingWidget(QWidget):
         self.inlet = None
         self.buffer = None
         self.timer = QTimer(self)
-        self.timer.setInterval(100)  # ms
+        self.timer.setInterval(20)  # ms for higher frame rate
         # Signals
         self.start_btn.clicked.connect(self.start_stream)
         self.stop_btn.clicked.connect(self.stop_stream)
@@ -210,10 +214,33 @@ class StreamingWidget(QWidget):
             self.inlet = StreamInlet(eeg_streams[0])
             info = self.inlet.info()
             n_ch = info.channel_count()
+            # adjust figure size for channel count (height inches per channel)
+            self.figure.set_size_inches(10, max(4, n_ch * 1.5))
             sr = int(info.nominal_srate())
-            buf_len = sr * 5
+            buf_len = 500  # fixed number of samples to display
             from collections import deque
             self.buffer = [deque(maxlen=buf_len) for _ in range(n_ch)]
+            # Prepare figure for efficient real-time update
+            self.figure.clear()
+            self.axes = []
+            self.lines = []
+            for idx in range(n_ch):
+                ax = self.figure.add_subplot(n_ch, 1, idx+1)
+                ax.set_ylim(-100, 100)  # static amplitude range
+                ax.set_xlim(0, buf_len)  # fixed sample window on x-axis
+                ax.set_ylabel(f"Ch {idx+1}")
+                if idx < n_ch - 1:
+                    ax.set_xticklabels([])
+                else:
+                    ax.set_xlabel("Samples")
+                line, = ax.plot([], [], color='blue')
+                self.lines.append(line)
+                self.axes.append(ax)
+            self.figure.tight_layout()
+            self.canvas.draw()
+            # ensure canvas is tall enough and enable scrolling
+            height_px = int(self.figure.get_figheight() * self.figure.get_dpi())
+            self.canvas.setMinimumHeight(height_px)
             self.start_btn.setEnabled(False)
             self.stop_btn.setEnabled(True)
             self.timer.start()
@@ -226,20 +253,26 @@ class StreamingWidget(QWidget):
         self.stop_btn.setEnabled(False)
 
     def update_plot(self):
-        if not self.inlet: return
+        if not self.inlet:
+            return
         chunk, _ = self.inlet.pull_chunk(timeout=0.0, max_samples=32)
         if chunk:
+            # append new samples
             for sample in chunk:
                 for i, val in enumerate(sample):
                     self.buffer[i].append(val)
-            self.figure.clear()
-            ax = self.figure.add_subplot(111)
-            for ch_data in self.buffer:
-                ax.plot(list(ch_data), alpha=0.7)
-            ax.set_title("Live EEG Stream")
-            ax.set_xlabel("Samples")
-            ax.set_ylabel("Amplitude")
-            self.canvas.draw()
+            # update each line object with new buffer data
+            for idx, line in enumerate(self.lines):
+                data = list(self.buffer[idx])
+                line.set_data(range(len(data)), data)
+            # reapply fixed sample window on x-axis and autoscale y-axis to data
+            max_samples = self.buffer[0].maxlen
+            for ax in self.axes:
+                ax.set_xlim(0, max_samples)
+                ax.relim()
+                ax.autoscale_view(scaley=True)
+            # redraw canvas efficiently
+            self.canvas.draw_idle()
 
 class MainWindow(QMainWindow):
     def __init__(self):

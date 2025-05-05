@@ -185,12 +185,12 @@ def update_streaming_plot():
             
             # Create new figure with updated data
             fig = go.Figure()
-            
-            # Add traces for each channel
-            times = np.linspace(-window_size, 0, len(next(iter(st.session_state.channel_data))))
+            # Number of samples in buffer
+            buf_len = st.session_state.channel_data[0].maxlen
+            # Add traces for each channel using sample index on x-axis
             for i, channel_data in enumerate(st.session_state.channel_data):
                 fig.add_trace(go.Scatter(
-                    x=times,
+                    x=list(range(len(channel_data))),
                     y=list(channel_data),
                     name=f'Channel {i+1}',
                     mode='lines'
@@ -199,19 +199,21 @@ def update_streaming_plot():
             # Update layout
             fig.update_layout(
                 title='Real-time EEG Data',
-                xaxis_title='Time (s)',
+                xaxis_title='Samples',
                 yaxis_title='Amplitude (µV)',
                 showlegend=True,
                 uirevision=True,
                 height=600,
                 xaxis=dict(
-                    range=[-window_size, 0],
+                    title='Samples',
+                    range=[0, buf_len],  # fixed sample window
                     showgrid=True,
                     gridwidth=1,
                     gridcolor='LightGrey',
                 ),
                 yaxis=dict(
-                    range=[-100, 100],
+                    title='Amplitude (µV)',
+                    range=[-100, 100],  # fixed amplitude window
                     showgrid=True,
                     gridwidth=1,
                     gridcolor='LightGrey',
