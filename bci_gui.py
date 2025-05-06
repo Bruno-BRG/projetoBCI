@@ -1,16 +1,21 @@
 import sys
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QLabel, QStackedWidget, QFileDialog, QListWidget, QInputDialog,
-    QScrollArea, QCheckBox
+    QPushButton, QLabel, QStackedWidget, QInputDialog,
+    QScrollArea, QCheckBox, QMessageBox, QGroupBox
 )
 from PyQt5.QtGui import QPalette, QColor
 from PyQt5.QtWidgets import QStyleFactory
 from PyQt5.QtCore import Qt, pyqtSignal, QThread, QObject, QTimer
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 import matplotlib.pyplot as plt
-from ML1 import load_local_eeg_data, create_bci_system
+import numpy as np
+import os
+from datetime import datetime
+from ML1 import load_local_eeg_data, create_bci_system, EEGAugmentation
 from pylsl import StreamInlet, resolve_streams
+import logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s: %(message)s')
 
 class CalibrationWidget(QWidget):
     """Widget for calibration mode: load data, navigate samples, add to calibration, and train model"""  
@@ -182,16 +187,23 @@ class StreamingWidget(QWidget):
     """Widget for live LSL streaming and real-time EEG plotting"""
     def __init__(self, parent=None):
         super().__init__(parent)
-        layout = QVBoxLayout()
+        # Main panel for streaming widget
+        main_group = QGroupBox("Streaming Panel")
+        layout = QVBoxLayout(main_group)
         # Plot area with scrollable canvas
+        plot_group = QGroupBox("EEG Plot")
+        plot_layout = QVBoxLayout(plot_group)
         self.figure = plt.figure()
         self.canvas = FigureCanvas(self.figure)
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setWidget(self.canvas)
+        plot_layout.addWidget(self.scroll)
+        layout.addWidget(plot_group)
         
         # Control buttons and options
-        control_layout = QHBoxLayout()
+        control_group = QGroupBox("Controls")
+        control_layout = QHBoxLayout(control_group)
         self.start_btn = QPushButton("Start Streaming")
         self.stop_btn = QPushButton("Stop Streaming")
         self.stop_btn.setEnabled(False)
@@ -200,23 +212,45 @@ class StreamingWidget(QWidget):
         control_layout.addWidget(self.start_btn)
         control_layout.addWidget(self.stop_btn)
         control_layout.addWidget(self.process_check)
-        
-        layout.addWidget(self.scroll)
-        layout.addLayout(control_layout)
+        self.capture_button = QPushButton("Capture 5s")
+        control_layout.addWidget(self.capture_button)
+        layout.addWidget(control_group)
+        # Prediction display
+        self.pred_label = QLabel("Pred: N/A")
+        self.conf_label = QLabel("Conf: N/A")
+         
+        layout.addWidget(self.pred_label)
+        layout.addWidget(self.conf_label)
         self.setLayout(layout)
+        # Add main_group as widget layout
+        outer_layout = QVBoxLayout(self)
+        outer_layout.addWidget(main_group)
+        self.setLayout(outer_layout)
         
         # LSL inlet and buffer
         self.inlet = None
         self.buffer = None
         self.timer = QTimer(self)
         self.timer.setInterval(20)  # ms for higher frame rate
+        # Capture state variables
+        self.capturing = False
+        self.capture_buffer = []
+        self.sample_count = 0
+        self.capture_needed = 0
         
         # Signals
         self.start_btn.clicked.connect(self.start_stream)
         self.stop_btn.clicked.connect(self.stop_stream)
         self.timer.timeout.connect(self.update_plot)
+        self.capture_button.clicked.connect(self.start_capture)
+        # BCISystem for real-time inference
+        self.bci = create_bci_system()
+        self.window_size = None
+        self.window_step = None
+        self.sample_since_last = 0
         
     def start_stream(self):
+        logging.info("Starting LSL EEG stream")
         streams = resolve_streams(wait_time=1.0)
         eeg_streams = [s for s in streams if s.type() == 'EEG']
         if eeg_streams:
@@ -226,6 +260,16 @@ class StreamingWidget(QWidget):
             # adjust figure size for channel count (height inches per channel)
             self.figure.set_size_inches(10, max(4, n_ch * 1.5))
             sr = int(info.nominal_srate())
+            self.sr = sr  # store sample rate for capture
+            # initialize model for real-time classification
+            self.bci.initialize_model(n_ch)
+            if not self.bci.is_calibrated:
+                QMessageBox.warning(self, "Model Warning", \
+                    "Checkpoint incompatible or not loaded. Classification disabled until calibration.")
+            # set sliding window of 1s and prediction every 1s
+            self.window_size = int(self.sr * 1.0)
+            self.window_step = int(self.sr * 1.0)
+            self.sample_since_last = 0
             buf_len = 500  # fixed number of samples to display
             from collections import deque
             self.buffer = [deque(maxlen=buf_len) for _ in range(n_ch)]
@@ -253,6 +297,18 @@ class StreamingWidget(QWidget):
             self.start_btn.setEnabled(False)
             self.stop_btn.setEnabled(True)
             self.timer.start()
+            logging.info(f"Stream started: {n_ch} channels at {self.sr} Hz")
+
+    def start_capture(self):
+        """Start capturing next 5 seconds of EEG data"""
+        if not self.inlet or not hasattr(self, 'sr'):
+            return
+        self.capture_buffer = []
+        self.sample_count = 0
+        self.capture_needed = int(self.sr * 5)
+        self.capturing = True
+        self.capture_button.setEnabled(False)
+        logging.info("Started 5s data capture")
 
     def stop_stream(self):
         self.timer.stop()
@@ -260,6 +316,7 @@ class StreamingWidget(QWidget):
         self.buffer = None
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
+        logging.info("Stopped EEG stream")
 
     def update_plot(self):
         if not self.inlet:
@@ -294,6 +351,48 @@ class StreamingWidget(QWidget):
             
             # redraw canvas efficiently
             self.canvas.draw_idle()
+
+        # Capture logic: accumulate data for 5 seconds
+        if self.capturing and chunk:
+            for sample in chunk:
+                self.capture_buffer.append(sample)
+            self.sample_count += len(chunk)
+            if self.sample_count >= self.capture_needed:
+                self.capturing = False
+                self.capture_button.setEnabled(True)
+                data_arr = np.array(self.capture_buffer)
+                os.makedirs('captured_data', exist_ok=True)
+                filename = datetime.now().strftime("captured_data/capture_%Y%m%d_%H%M%S.npy")
+                np.save(filename, data_arr)
+                logging.info(f"Saved captured data to {filename}")
+
+        # Real-time classification with sliding window
+        if hasattr(self, 'bci') and self.bci.is_calibrated and self.buffer and self.window_size:
+            if len(self.buffer[0]) >= self.window_size:
+                self.sample_since_last += len(chunk)
+                if self.sample_since_last >= self.window_step:
+                    self.sample_since_last = 0
+                    # extract last window_size samples
+                    window_data = np.array([list(self.buffer[i])[-self.window_size:] for i in range(len(self.buffer))])
+                    # apply data augmentation before inference
+                    aug_data = EEGAugmentation.time_shift(window_data)
+                    aug_data = EEGAugmentation.add_gaussian_noise(aug_data)
+                    aug_data = EEGAugmentation.scale_amplitude(aug_data)
+                    # Save window plot for analysis
+                    os.makedirs('window_plots', exist_ok=True)
+                    fig, axs = plt.subplots(len(self.buffer), 1, figsize=(10, len(self.buffer)*2))
+                    for i, ax in enumerate(axs):
+                        ax.plot(aug_data[i], color='blue')
+                        ax.set_ylabel(f'Ch {i+1}')
+                    fig.tight_layout()
+                    filename = datetime.now().strftime("window_plots/window_%Y%m%d_%H%M%S_%f.png")
+                    fig.savefig(filename)
+                    plt.close(fig)
+                    logging.info(f"Saved window plot to {filename}")
+                    pred, conf = self.bci.predict_movement(aug_data)
+                    self.pred_label.setText(f"Pred: {pred}")
+                    self.conf_label.setText(f"Conf: {conf:.2%}")
+                    logging.info(f"Model prediction: {pred} (confidence {conf:.2%}) on window of {self.window_size} samples")
 
 class MainWindow(QMainWindow):
     def __init__(self):

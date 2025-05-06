@@ -13,6 +13,8 @@ from sklearn.metrics import accuracy_score, confusion_matrix, classification_rep
 import seaborn as sns
 import matplotlib.pyplot as plt
 from typing import Dict, Any, Tuple
+import pandas as pd
+import glob
 
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, dropout=0.1, max_len=5000):
@@ -150,117 +152,48 @@ class EEGAugmentation:
         return np.vstack(augmented_data)
 
 def load_and_process_data(subject_id=1, augment=True):
-    # Load EEG data for a single subject
-    physionet_paths = mne.datasets.eegbci.load_data(subject_id, runs=[4, 8, 12])
-    
-    parts = [
-        mne.io.read_raw_edf(
-            path,
-            preload=True,
-            stim_channel='auto',
-            verbose='WARNING',
-        )
-        for path in physionet_paths
-    ]
-    raw = concatenate_raws(parts)
-    events, _ = mne.events_from_annotations(raw)
-
-    # Get EEG channels
-    eeg_channel_inds = mne.pick_types(
-        raw.info,
-        meg=False,
-        eeg=True,
-        stim=False,
-        eog=False,
-        exclude='bads',
-    )
-
-    EEG_CHANNEL = int(len(eeg_channel_inds))
-    epoched = mne.Epochs(
-        raw,
-        events,
-        dict(left=2, right=3),
-        tmin=1,
-        tmax=4.1,
-        proj=False,
-        picks=eeg_channel_inds,
-        baseline=None,
-        preload=True
-    )
-    X = (epoched.get_data() * 1e3).astype(np.float64)  # Changed to float64
-    y = (epoched.events[:, 2] - 2).astype(np.int64)
-    
+    """Load EEG data from all CSV files in project root and apply augmentation"""
+    # find csv files for this subject under eeg_data
+    subj_dir = os.path.join('eeg_data', 'MNE-eegbci-data', 'files', 'eegmmidb', '1.0.0', f'S{subject_id:03d}')
+    csv_files = glob.glob(os.path.join(subj_dir, '*_csv*.csv'))
+    if not csv_files:
+        raise FileNotFoundError("No CSV files found for load_and_process_data")
+    X_list, y_list = [], []
+    for path in csv_files:
+        # Read CSV using python engine, skip lines starting with '%', and skip bad lines
+        df = pd.read_csv(path, comment='%', engine='python', on_bad_lines='skip')
+        # Keep only EEG channels (EXG Channel columns)
+        eeg_cols = [col for col in df.columns if col.startswith('EXG Channel')]
+        df_eeg = df[eeg_cols]
+        arr = df_eeg.values
+        # Assume rows=time, cols=channels or vice versa
+        if arr.shape[0] < arr.shape[1]:
+            data = arr
+        else:
+            data = arr.T
+        X_list.append(data)
+        # Simple label from filename
+        lower = os.path.basename(path).lower()
+        if 'left' in lower:
+            y_list.append(0)
+        elif 'right' in lower:
+            y_list.append(1)
+        else:
+            y_list.append(0)
+    X = np.stack(X_list, axis=0)
+    y = np.array(y_list, dtype=np.int64)
+    EEG_CHANNEL = X.shape[1]
+    # Data augmentation if requested
     if augment:
-        # Apply data augmentation
-        augmented_X = EEGAugmentation.augment_data(X)
-        # Combine original and augmented data
-        X = np.concatenate([X, augmented_X], axis=0)
-        y = np.concatenate([y, np.repeat(y, augmented_X.shape[0] // y.shape[0])])
-    
+        X_aug = EEGAugmentation.augment_data(X)
+        y_aug = np.repeat(y, X_aug.shape[0] // y.shape[0])
+        X = np.concatenate([X, X_aug], axis=0)
+        y = np.concatenate([y, y_aug], axis=0)
     return X, y, EEG_CHANNEL
 
 def load_local_eeg_data(subject_id=1, augment=True):
-    """Load EEG data from local files in eeg_data folder"""
-    base_path = os.path.join('eeg_data', 'MNE-eegbci-data', 'files', 'eegmmidb', '1.0.0', f'S{subject_id:03d}')
-    runs = [4, 8, 12]  # Motor imagery: hands vs feet
-    
-    # Find the EDF files for the specified runs
-    edf_files = []
-    for run in runs:
-        file_pattern = f'S{subject_id:03d}R{run:02d}.edf'
-        file_path = os.path.join(base_path, file_pattern)
-        if os.path.exists(file_path):
-            edf_files.append(file_path)
-        else:
-            raise FileNotFoundError(f"EEG data file not found: {file_path}")
-    
-    # Load and concatenate the EDF files
-    parts = [
-        mne.io.read_raw_edf(
-            path,
-            preload=True,
-            stim_channel='auto',
-            verbose='WARNING',
-        )
-        for path in edf_files
-    ]
-    raw = concatenate_raws(parts)
-    events, _ = mne.events_from_annotations(raw)
-
-    # Get EEG channels
-    eeg_channel_inds = mne.pick_types(
-        raw.info,
-        meg=False,
-        eeg=True,
-        stim=False,
-        eog=False,
-        exclude='bads',
-    )
-
-    EEG_CHANNEL = int(len(eeg_channel_inds))
-    epoched = mne.Epochs(
-        raw,
-        events,
-        dict(left=2, right=3),
-        tmin=1,
-        tmax=4.1,
-        proj=False,
-        picks=eeg_channel_inds,
-        baseline=None,
-        preload=True
-    )
-    
-    X = (epoched.get_data() * 1e3).astype(np.float64)  # Changed to float64
-    y = (epoched.events[:, 2] - 2).astype(np.int64)
-    
-    if augment:
-        # Apply data augmentation
-        augmented_X = EEGAugmentation.augment_data(X)
-        # Combine original and augmented data
-        X = np.concatenate([X, augmented_X], axis=0)
-        y = np.concatenate([y, np.repeat(y, augmented_X.shape[0] // y.shape[0])])
-    
-    return X, y, EEG_CHANNEL
+    """Load EEG data from all CSV files in project root (alias of load_and_process_data)"""
+    return load_and_process_data(subject_id, augment)
 
 def load_model(eeg_channel):
     model = EEGClassificationModel(eeg_channel=eeg_channel, dropout=0.125)
@@ -454,8 +387,21 @@ class BCISystem:
         self.model = self.model.double()  # Convert model to double precision
         self.model.to(self.device)
         if self.model_path and os.path.exists(self.model_path):
-            self.model.load_state_dict(torch.load(self.model_path))
-            self.is_calibrated = True
+            # Load checkpoint and filter for matching parameter shapes only
+            state = torch.load(self.model_path)
+            model_dict = self.model.state_dict()
+            filtered_state = {k: v for k, v in state.items()
+                              if k in model_dict and v.size() == model_dict[k].size()}
+            self.model.load_state_dict(filtered_state, strict=False)
+            # Warn about keys not loaded
+            missing = set(model_dict.keys()) - set(filtered_state.keys())
+            unexpected = set(state.keys()) - set(filtered_state.keys())
+            if missing:
+                print(f"Warning: missing keys in checkpoint: {missing}")
+            if unexpected:
+                print(f"Warning: unexpected keys ignored: {unexpected}")
+            # Mark calibrated if any weights loaded
+            self.is_calibrated = len(filtered_state) > 0
 
     def add_calibration_sample(self, eeg_data, label):
         """Adiciona uma amostra de calibração"""
@@ -519,8 +465,12 @@ class BCISystem:
 
         self.is_calibrated = True
         if self.model_path:
+            # Ensure checkpoint directory exists
+            ckpt_dir = os.path.dirname(self.model_path)
+            if ckpt_dir and not os.path.exists(ckpt_dir):
+                os.makedirs(ckpt_dir, exist_ok=True)
             torch.save(self.model.state_dict(), self.model_path)
-            
+         
         return tracker.plot_training_history()
 
     def predict_movement(self, eeg_data):
