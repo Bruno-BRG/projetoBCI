@@ -2,7 +2,7 @@ import sys
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QStackedWidget, QFileDialog, QListWidget, QInputDialog,
-    QScrollArea
+    QScrollArea, QCheckBox
 )
 from PyQt5.QtGui import QPalette, QColor
 from PyQt5.QtWidgets import QStyleFactory
@@ -189,26 +189,33 @@ class StreamingWidget(QWidget):
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setWidget(self.canvas)
-        # Control buttons
+        
+        # Control buttons and options
+        control_layout = QHBoxLayout()
         self.start_btn = QPushButton("Start Streaming")
         self.stop_btn = QPushButton("Stop Streaming")
         self.stop_btn.setEnabled(False)
+        self.process_check = QCheckBox("Enable Additional Processing")
+        self.process_check.setChecked(False)
+        control_layout.addWidget(self.start_btn)
+        control_layout.addWidget(self.stop_btn)
+        control_layout.addWidget(self.process_check)
+        
         layout.addWidget(self.scroll)
-        btn_layout = QHBoxLayout()
-        btn_layout.addWidget(self.start_btn)
-        btn_layout.addWidget(self.stop_btn)
-        layout.addLayout(btn_layout)
+        layout.addLayout(control_layout)
         self.setLayout(layout)
+        
         # LSL inlet and buffer
         self.inlet = None
         self.buffer = None
         self.timer = QTimer(self)
         self.timer.setInterval(20)  # ms for higher frame rate
+        
         # Signals
         self.start_btn.clicked.connect(self.start_stream)
         self.stop_btn.clicked.connect(self.stop_stream)
         self.timer.timeout.connect(self.update_plot)
-
+        
     def start_stream(self):
         streams = resolve_streams(wait_time=1.0)
         eeg_streams = [s for s in streams if s.type() == 'EEG']
@@ -262,17 +269,29 @@ class StreamingWidget(QWidget):
             # append new samples
             for sample in chunk:
                 for i, val in enumerate(sample):
+                    if self.process_check.isChecked():
+                        # Only apply processing if enabled
+                        # You can add your processing here if needed in the future
+                        pass
                     self.buffer[i].append(val)
+                    
             # update each line object with new buffer data
             for idx, line in enumerate(self.lines):
                 data = list(self.buffer[idx])
                 line.set_data(range(len(data)), data)
-            # reapply fixed sample window on x-axis and autoscale y-axis to data
+            
+            # Update axes
             max_samples = self.buffer[0].maxlen
             for ax in self.axes:
                 ax.set_xlim(0, max_samples)
-                ax.relim()
-                ax.autoscale_view(scaley=True)
+                if not self.process_check.isChecked():
+                    # Keep fixed y-axis for raw data
+                    ax.set_ylim(-100, 100)
+                else:
+                    # Allow autoscaling if processing is enabled
+                    ax.relim()
+                    ax.autoscale_view(scaley=True)
+            
             # redraw canvas efficiently
             self.canvas.draw_idle()
 
