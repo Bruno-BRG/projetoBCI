@@ -17,6 +17,19 @@ from typing import Dict, Any, Tuple
 import pandas as pd
 import glob
 
+# Global device configuration
+def get_device():
+    if not hasattr(get_device, 'device'):
+        if torch.cuda.is_available():
+            current_device = torch.cuda.current_device()
+            device_name = torch.cuda.get_device_name(current_device)
+            get_device.device = torch.device('cuda')
+            print(f"GPU found: {device_name}")
+        else:
+            get_device.device = torch.device('cpu')
+            print("No GPU found, using CPU")
+    return get_device.device
+
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, dropout=0.1, max_len=5000):
         super().__init__()
@@ -445,12 +458,15 @@ def evaluate_model(model: nn.Module,
 
 class BCISystem:
     def __init__(self, model_path=None):
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.device = get_device()  # Use global device
         self.model = None
         self.eeg_channel = None
         self.calibration_data = {'X': [], 'y': []}
         self.is_calibrated = False
         self.model_path = model_path
+
+    def _get_best_device(self):
+        return get_device()  # Use global device function
 
     def initialize_model(self, eeg_channel):
         # Accept either channel count or list of channel names
@@ -461,14 +477,16 @@ class BCISystem:
         self.eeg_channel = ch_count
         self.model = EEGClassificationModel(eeg_channel=ch_count, dropout=0.125)
         self.model = self.model.double()  # Convert model to double precision
-        self.model.to(self.device)
+        self.model = self.model.to(self.device)  # Move model to GPU/CPU
+        
         if self.model_path and os.path.exists(self.model_path):
             # Load checkpoint and filter for matching parameter shapes only
-            state = torch.load(self.model_path)
+            state = torch.load(self.model_path, map_location=self.device)  # Load to correct device
             model_dict = self.model.state_dict()
             filtered_state = {k: v for k, v in state.items()
                               if k in model_dict and v.size() == model_dict[k].size()}
             self.model.load_state_dict(filtered_state, strict=False)
+            
             # Warn about keys not loaded
             missing = set(model_dict.keys()) - set(filtered_state.keys())
             unexpected = set(state.keys()) - set(filtered_state.keys())
@@ -484,7 +502,7 @@ class BCISystem:
         self.calibration_data['X'].append(eeg_data)
         self.calibration_data['y'].append(label)
 
-    def train_calibration(self, num_epochs=20, batch_size=4, learning_rate=1e-3):
+    def train_calibration(self, num_epochs=100, batch_size=4, learning_rate=1e-3):
         """Trains the model with the calibration data"""
         if len(self.calibration_data['X']) < 2:
             raise ValueError("Need at least 2 calibration samples")
@@ -610,27 +628,28 @@ class BCISystem:
             logit = output.item()
             prob = torch.sigmoid(torch.tensor(logit)).item()
             
-            # Calculate confidences for Left and Right
-            left_confidence = (1 - prob) /100 # Scale to percentage
-            right_confidence = prob / 100 # Scale to percentage
+            # Calculate confidences for Left and Right (already in 0-100% range)
+            left_confidence = (1 - prob) * 100
+            right_confidence = prob * 100
             
-            # Calculate uncertain confidence - higher when both left/right are close to 50%
-            confidence_diff = abs(left_confidence - right_confidence)
-            uncertain_confidence = max(0, 100 - confidence_diff)
+            # Calculate uncertain confidence based on how close the prediction is to 0.5
+            confidence_diff = abs(prob - 0.5) * 200  # Scale to 0-100%
+            uncertain_confidence = 100 - confidence_diff  # Higher when closer to 0.5
             
-            # Define minimum confidence threshold for Left/Right predictions (40%)
-            MIN_CONFIDENCE = 40
+            # Define thresholds
+            UNCERTAIN_THRESHOLD = 40  # If confidence difference is less than this, predict uncertain
+            MIN_CONFIDENCE = 60       # Minimum confidence needed for Left/Right prediction
             
-            # If the difference between left/right is small, predict uncertain
-            if uncertain_confidence > 50:  # confidence_diff < 60
+            # If difference from 0.5 is small, predict uncertain
+            if confidence_diff < (UNCERTAIN_THRESHOLD / 100):
                 return "Uncertain", uncertain_confidence
             
             # Otherwise return the highest confidence prediction if it meets threshold
             if max(left_confidence, right_confidence) >= MIN_CONFIDENCE:
                 if left_confidence > right_confidence:
-                    return "Left", min(100, left_confidence)  # Cap at 100%
+                    return "Left", left_confidence
                 else:
-                    return "Right", min(100, right_confidence)  # Cap at 100%
+                    return "Right", right_confidence
             
             # If no prediction meets threshold, return uncertain
             return "Uncertain", uncertain_confidence
@@ -706,7 +725,7 @@ class MultiSubjectTest:
     def __init__(self, train_samples=20, test_samples=10):
         self.train_samples = train_samples
         self.test_samples = test_samples
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.device = get_device()  # Use global device
         self.model = None
         self.training_history = {
             'train_losses': [], 'val_losses': [],

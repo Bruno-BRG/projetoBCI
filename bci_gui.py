@@ -139,7 +139,7 @@ class CalibrationWidget(QWidget):
     def train_model(self):
         if self.bci and self.eeg_channel:
             try:
-                self.bci.train_calibration(num_epochs=10, batch_size=4, learning_rate=1e-3)
+                self.bci.train_calibration(num_epochs=100, batch_size=4, learning_rate=1e-3)
                 QMessageBox.information(self, "Success", "Model training completed successfully")
             except Exception as e:
                 QMessageBox.warning(self, "Error", f"Training failed: {str(e)}")
@@ -636,9 +636,9 @@ class TestWidget(QWidget):
             # Initialize test system
             self.test_system = MultiSubjectTest(train_samples=20, test_samples=10)
             
-            # Run training and evaluation
+            # Run training and evaluation with 100 epochs
             history = self.test_system.train_and_evaluate(
-                num_epochs=20,
+                num_epochs=100,  # Updated to 100 epochs
                 batch_size=32,
                 learning_rate=1e-3
             )
