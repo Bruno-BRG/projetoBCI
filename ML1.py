@@ -1,11 +1,12 @@
 import os
-import mne
-from mne.io import concatenate_raws
 import torch
 import torch.nn as nn
 import torch.utils.data as data
 from torch.utils.data import TensorDataset, DataLoader
 import torch.optim as optim
+import torch.nn.functional as F
+import pytorch_lightning as L
+import torchmetrics
 import numpy as np
 import math
 from torch.utils.tensorboard import SummaryWriter
@@ -60,32 +61,46 @@ class TransformerBlock(nn.Module):
         return x
 
 class EEGClassificationModel(nn.Module):
-    def __init__(self, eeg_channel, dropout=0.1):
+    def __init__(self, eeg_channel, dropout=0.5):  # Increased from 0.125 to 0.5
         super().__init__()
 
+        # Add L2 regularization through weight_decay in optimizer later
         self.conv = nn.Sequential(
             nn.Conv1d(eeg_channel, eeg_channel, 11, 1, padding=5, bias=False),
             nn.BatchNorm1d(eeg_channel),
             nn.ReLU(True),
-            nn.Dropout1d(dropout),
+            nn.Dropout1d(dropout),  # Increased dropout
             nn.Conv1d(eeg_channel, eeg_channel * 2, 11, 1, padding=5, bias=False),
             nn.BatchNorm1d(eeg_channel * 2),
+            nn.Dropout1d(dropout),  # Added another dropout layer
         )
 
         self.transformer = nn.Sequential(
             PositionalEncoding(eeg_channel * 2, dropout),
             TransformerBlock(eeg_channel * 2, 4, eeg_channel // 8, dropout),
+            nn.Dropout(dropout),  # Added dropout between transformer blocks
             TransformerBlock(eeg_channel * 2, 4, eeg_channel // 8, dropout),
+            nn.Dropout(dropout),  # Added final dropout
         )
 
         self.mlp = nn.Sequential(
-            nn.Linear(eeg_channel * 2, eeg_channel // 2),
+            nn.Linear(eeg_channel * 2, eeg_channel),  # Made hidden layer wider
+            nn.ReLU(True),
+            nn.Dropout(dropout),  # Increased dropout
+            nn.BatchNorm1d(eeg_channel),  # Added batch norm
+            nn.Linear(eeg_channel, eeg_channel // 2),  # Added extra layer
             nn.ReLU(True),
             nn.Dropout(dropout),
+            nn.BatchNorm1d(eeg_channel // 2),  # Added batch norm
             nn.Linear(eeg_channel // 2, 1),
         )
 
     def forward(self, x):
+        # Add random noise during training for additional regularization
+        if self.training:
+            noise = torch.randn_like(x) * 0.1
+            x = x + noise
+            
         x = self.conv(x)
         x = x.permute(0, 2, 1)
         x = self.transformer(x)
@@ -117,81 +132,109 @@ class EEGDataset(data.Dataset):
             }
 
 class EEGAugmentation:
+    augmentation_count = 5  # Number of augmented versions to create per sample
+
     @staticmethod
     def time_shift(data, max_shift=10):
+        """Apply random time shift to the signal"""
         shifted_data = np.roll(data, np.random.randint(-max_shift, max_shift), axis=-1)
         return shifted_data
     
     @staticmethod
     def add_gaussian_noise(data, mean=0, std=0.1):
-        noise = np.random.normal(mean, std, data.shape)
+        """Add random Gaussian noise to the signal"""
+        noise = np.random.normal(mean, std * np.std(data), data.shape)
         return data + noise
     
     @staticmethod
     def scale_amplitude(data, scale_range=(0.8, 1.2)):
+        """Scale signal amplitude by random factor"""
         scale = np.random.uniform(scale_range[0], scale_range[1])
         return data * scale
     
     @staticmethod
-    def augment_data(data, augmentation_count=5):
-        augmented_data = []
-        # Create augmented versions of each sample
-        for i in range(data.shape[0]):
-            sample = data[i:i+1]  # Keep the sample's dimensions
-            for _ in range(augmentation_count):
+    def augment_data(data):
+        """Apply all augmentations to create multiple versions of each sample"""
+        augmented_samples = []
+        # Keep original data
+        augmented_samples.append(data)
+        
+        # For each original sample
+        for i in range(len(data)):
+            sample = data[i:i+1]  # Keep dimensions (1, channels, time)
+            # Create augmented versions
+            for _ in range(EEGAugmentation.augmentation_count):
                 aug_sample = sample.copy()
-                # Apply random augmentations
+                # Apply augmentations in sequence with different random values
                 if np.random.random() > 0.3:
                     aug_sample = EEGAugmentation.time_shift(aug_sample)
                 if np.random.random() > 0.3:
                     aug_sample = EEGAugmentation.add_gaussian_noise(aug_sample)
                 if np.random.random() > 0.3:
                     aug_sample = EEGAugmentation.scale_amplitude(aug_sample)
-                augmented_data.append(aug_sample)
-        # Stack all augmented samples while maintaining original dimensions
-        return np.vstack(augmented_data)
+                augmented_samples.append(aug_sample)
+        
+        # Stack all samples together
+        return np.concatenate(augmented_samples, axis=0)
 
-def load_and_process_data(subject_id=1, augment=True):
-    """Load EEG data from all CSV files in project root and apply augmentation"""
-    # find csv files for this subject under eeg_data
+# Define the 16 standard electrodes in the desired order
+WANTED_CHANNELS = ['C3','C4','Fp1','Fp2','F7','F3','F4','F8',
+                   'T7','T8','P7','P3','P4','P8','O1','O2']
+
+def load_and_process_data(subject_id=1, augment=False):  # Changed default to False
+    """Load EEG data from CSV files for imagined left/right hand movement and apply epoching"""
+    # Find relevant run files (4,8,12 contain imagined left/right hand movement)
+    runs = [4, 8, 12]
     subj_dir = os.path.join('eeg_data', 'MNE-eegbci-data', 'files', 'eegmmidb', '1.0.0', f'S{subject_id:03d}')
-    csv_files = glob.glob(os.path.join(subj_dir, '*_csv*.csv'))
-    if not csv_files:
-        raise FileNotFoundError("No CSV files found for load_and_process_data")
     X_list, y_list = [], []
-    for path in csv_files:
-        # Read CSV using python engine, skip lines starting with '%', and skip bad lines
-        df = pd.read_csv(path, comment='%', engine='python', on_bad_lines='skip')
-        # Keep only EEG channels (EXG Channel columns)
-        eeg_cols = [col for col in df.columns if col.startswith('EXG Channel')]
-        df_eeg = df[eeg_cols]
-        arr = df_eeg.values
-        # Assume rows=time, cols=channels or vice versa
-        if arr.shape[0] < arr.shape[1]:
-            data = arr
-        else:
-            data = arr.T
-        X_list.append(data)
-        # Simple label from filename
-        lower = os.path.basename(path).lower()
-        if 'left' in lower:
-            y_list.append(0)
-        elif 'right' in lower:
-            y_list.append(1)
-        else:
-            y_list.append(0)
-    X = np.stack(X_list, axis=0)
-    y = np.array(y_list, dtype=np.int64)
-    EEG_CHANNEL = X.shape[1]
-    # Data augmentation if requested
-    if augment:
-        X_aug = EEGAugmentation.augment_data(X)
-        y_aug = np.repeat(y, X_aug.shape[0] // y.shape[0])
-        X = np.concatenate([X, X_aug], axis=0)
-        y = np.concatenate([y, y_aug], axis=0)
-    return X, y, EEG_CHANNEL
 
-def load_local_eeg_data(subject_id=1, augment=True):
+    for run in runs:
+        csv_path = os.path.join(subj_dir, f'S{subject_id:03d}R{run:02d}_csv_openbci.csv')
+        if not os.path.exists(csv_path):
+            raise FileNotFoundError(f"Required CSV file not found: {csv_path}")
+
+        # Read CSV data
+        df = pd.read_csv(csv_path, comment='%', engine='python', on_bad_lines='skip')
+        eeg_cols = [col for col in df.columns if col.startswith('EXG Channel')]
+        data = df[eeg_cols].values.T  # channels x samples
+
+        # Find events from Annotations column
+        # T1 marks the start of left hand trials
+        # T2 marks the start of right hand trials
+        annotations = df['Annotations'].fillna('')
+        event_indices = []
+        event_types = []
+
+        for idx, annotation in enumerate(annotations):
+            if (annotation in ['T1', 'T2']):
+                event_indices.append(idx)
+                # Convert T1->0 (left), T2->1 (right)
+                event_types.append(0 if annotation == 'T1' else 1)
+
+        # Extract epochs: 1s to 4.1s after each event
+        sfreq = 125  # OpenBCI sample rate
+        samples_per_epoch = int(3.1 * sfreq)  # 3.1s window (4.1s - 1s)
+        start_offset = int(sfreq)  # 1s offset
+
+        for evt_idx, evt_type in zip(event_indices, event_types):
+            # Extract epoch
+            start_idx = evt_idx + start_offset
+            end_idx = start_idx + samples_per_epoch
+            if end_idx <= data.shape[1]:  # Only use if we have enough samples
+                epoch = data[:, start_idx:end_idx]
+                X_list.append(epoch)
+                y_list.append(evt_type)
+
+    if not X_list:
+        raise ValueError(f"No valid epochs found for subject {subject_id}")
+
+    X = np.stack(X_list)
+    y = np.array(y_list)
+    
+    # Removed augmentation code to keep only original samples
+    return X, y, X.shape[1]  # Return data, labels, and channel count
+
+def load_local_eeg_data(subject_id=1, augment=False):
     """Load EEG data from all CSV files in project root (alias of load_and_process_data)"""
     return load_and_process_data(subject_id, augment)
 
@@ -382,8 +425,13 @@ class BCISystem:
         self.model_path = model_path
 
     def initialize_model(self, eeg_channel):
-        self.eeg_channel = eeg_channel
-        self.model = EEGClassificationModel(eeg_channel=eeg_channel, dropout=0.125)
+        # Accept either channel count or list of channel names
+        if isinstance(eeg_channel, (list, tuple)):
+            ch_count = len(eeg_channel)
+        else:
+            ch_count = eeg_channel
+        self.eeg_channel = ch_count
+        self.model = EEGClassificationModel(eeg_channel=ch_count, dropout=0.125)
         self.model = self.model.double()  # Convert model to double precision
         self.model.to(self.device)
         if self.model_path and os.path.exists(self.model_path):
@@ -408,22 +456,14 @@ class BCISystem:
         self.calibration_data['X'].append(eeg_data)
         self.calibration_data['y'].append(label)
 
-    def train_calibration(self, num_epochs=10, batch_size=32, learning_rate=1e-3):
-        """Treina o modelo com os dados de calibração"""
-        if len(self.calibration_data['X']) < 10:
-            raise ValueError("Necessário pelo menos 10 amostras de calibração")
+    def train_calibration(self, num_epochs=20, batch_size=4, learning_rate=1e-3):
+        """Trains the model with the calibration data"""
+        if len(self.calibration_data['X']) < 2:
+            raise ValueError("Need at least 2 calibration samples")
 
         X = np.array(self.calibration_data['X'])
         y = np.array(self.calibration_data['y'])
-
-        # Aplica data augmentation nos dados de calibração
-        X_aug = EEGAugmentation.augment_data(X)
-        y_aug = np.repeat(y, X_aug.shape[0] // y.shape[0])
-
-        # Combina dados originais e aumentados
-        X = np.concatenate([X, X_aug], axis=0)
-        y = np.concatenate([y, y_aug])
-
+        
         # Split data into train and validation sets
         train_size = int(0.8 * len(X))
         indices = torch.randperm(len(X))
@@ -434,43 +474,98 @@ class BCISystem:
         X_train, y_train = X[train_indices], y[train_indices]
         X_val, y_val = X[val_indices], y[val_indices]
 
+        # Adjust batch size if we have few samples
+        actual_batch_size = min(batch_size, len(X_train))
+
         # Prepare data loaders
         train_dataset = TensorDataset(torch.DoubleTensor(X_train), torch.DoubleTensor(y_train))
         val_dataset = TensorDataset(torch.DoubleTensor(X_val), torch.DoubleTensor(y_val))
         
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-        val_loader = DataLoader(val_dataset, batch_size=batch_size)
+        train_loader = DataLoader(train_dataset, batch_size=actual_batch_size, shuffle=True)
+        val_loader = DataLoader(val_dataset, batch_size=actual_batch_size)
 
         # Initialize training components
         criterion = nn.BCEWithLogitsLoss()
-        optimizer = optim.Adam(self.model.parameters(), lr=learning_rate)
+        optimizer = optim.Adam(self.model.parameters(), lr=learning_rate, weight_decay=0.01)
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
         tracker = ModelTracker(log_dir="training_runs")
 
         # Training loop
+        best_val_loss = float('inf')
+        patience = 7
+        no_improve = 0
+
         for epoch in range(num_epochs):
             # Training phase
-            train_loss, train_preds, train_labels = train_epoch(
-                self.model, train_loader, criterion, optimizer, 
-                self.device, 'train', tracker
-            )
+            self.model.train()
+            train_loss = 0.0
+            train_preds = []
+            train_labels = []
+            
+            for inputs, labels in train_loader:
+                inputs = inputs.to(self.device)
+                labels = labels.to(self.device)
+                
+                optimizer.zero_grad()
+                outputs = self.model(inputs)  # Shape: [batch_size, 1]
+                outputs = outputs.view(-1)    # Flatten to [batch_size]
+                labels = labels.float()
+                
+                loss = criterion(outputs, labels)
+                loss.backward()
+                optimizer.step()
+                
+                train_loss += loss.item()
+                train_preds.extend(outputs.detach().cpu())
+                train_labels.extend(labels.cpu())
+            
+            train_loss /= len(train_loader)
+            train_preds = torch.stack(train_preds)
+            train_labels = torch.stack(train_labels)
             tracker.log_metrics('train', train_loss, train_preds, train_labels, epoch)
 
             # Validation phase
+            self.model.eval()
+            val_loss = 0.0
+            val_preds = []
+            val_labels = []
+            
             with torch.no_grad():
-                val_loss, val_preds, val_labels = train_epoch(
-                    self.model, val_loader, criterion, None,
-                    self.device, 'val', tracker
-                )
-                tracker.log_metrics('val', val_loss, val_preds, val_labels, epoch)
+                for inputs, labels in val_loader:
+                    inputs = inputs.to(self.device)
+                    labels = labels.to(self.device)
+                    
+                    outputs = self.model(inputs)  # Shape: [batch_size, 1]
+                    outputs = outputs.view(-1)    # Flatten to [batch_size]
+                    labels = labels.float()
+                    
+                    loss = criterion(outputs, labels)
+                    
+                    val_loss += loss.item()
+                    val_preds.extend(outputs.detach().cpu())
+                    val_labels.extend(labels.cpu())
+            
+            val_loss /= len(val_loader)
+            val_preds = torch.stack(val_preds)
+            val_labels = torch.stack(val_labels)
+            tracker.log_metrics('val', val_loss, val_preds, val_labels, epoch)
+
+            # Rest of the training loop...
+            scheduler.step(val_loss)
+
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                no_improve = 0
+                if self.model_path:
+                    torch.save(self.model.state_dict(), self.model_path)
+            else:
+                no_improve += 1
+
+            if no_improve >= patience:
+                print(f"Early stopping triggered after epoch {epoch+1}")
+                break
 
         self.is_calibrated = True
-        if self.model_path:
-            # Ensure checkpoint directory exists
-            ckpt_dir = os.path.dirname(self.model_path)
-            if ckpt_dir and not os.path.exists(ckpt_dir):
-                os.makedirs(ckpt_dir, exist_ok=True)
-            torch.save(self.model.state_dict(), self.model_path)
-         
         return tracker.plot_training_history()
 
     def predict_movement(self, eeg_data):
@@ -490,3 +585,67 @@ class BCISystem:
 def create_bci_system(model_path="checkpoints/bci_model.pth"):
     """Cria uma nova instância do sistema BCI"""
     return BCISystem(model_path=model_path)
+
+class ModelWrapper(L.LightningModule):
+    def __init__(self, model, lr=1e-3):
+        super().__init__()
+        self.model = model
+        self.lr = lr
+        self.train_accuracy = torchmetrics.Accuracy(task='binary')
+        self.val_accuracy = torchmetrics.Accuracy(task='binary')
+        self.test_accuracy = torchmetrics.Accuracy(task='binary')
+        
+    def forward(self, x):
+        return self.model(x)
+    
+    def training_step(self, batch, batch_nb):
+        x, y = batch
+        y_hat = self(x)
+        y_hat = y_hat.squeeze()  # Remove extra dimension to match target
+        y = y.squeeze()  # Ensure target is also squeezed
+        loss = F.binary_cross_entropy_with_logits(y_hat, y)
+        self.train_accuracy.update(y_hat, y)
+        acc = self.train_accuracy.compute()
+
+        self.log("train_loss", loss, prog_bar=True)
+        self.log("train_acc", acc, prog_bar=True)
+        return loss
+
+    def validation_step(self, batch, batch_nb):
+        x, y = batch
+        y_hat = self(x)
+        y_hat = y_hat.squeeze()  # Remove extra dimension to match target
+        y = y.squeeze()  # Ensure target is also squeezed
+        loss = F.binary_cross_entropy_with_logits(y_hat, y)
+        self.val_accuracy.update(y_hat, y)
+        acc = self.val_accuracy.compute()
+
+        self.log("val_loss", loss, prog_bar=True)
+        self.log("val_acc", acc, prog_bar=True)
+        return loss
+
+    def test_step(self, batch, batch_nb):
+        x, y = batch
+        y_hat = self(x)
+        y_hat = y_hat.squeeze()  # Remove extra dimension to match target
+        y = y.squeeze()  # Ensure target is also squeezed
+        loss = F.binary_cross_entropy_with_logits(y_hat, y)
+        self.test_accuracy.update(y_hat, y)
+
+        self.log("test_loss", loss, prog_bar=True)
+        self.log("test_acc", self.test_accuracy.compute(), prog_bar=True)
+        return loss
+
+    def configure_optimizers(self):
+        optimizer = optim.Adam(self.parameters(), lr=self.lr, weight_decay=0.01)
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode='min', factor=0.5, patience=5
+        )
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "monitor": "val_loss",
+            },
+        }
+

@@ -1,4 +1,6 @@
 import sys
+import torch
+import torch.optim as optim
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QStackedWidget, QInputDialog,
@@ -18,56 +20,101 @@ import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s: %(message)s')
 
 class CalibrationWidget(QWidget):
-    """Widget for calibration mode: load data, navigate samples, add to calibration, and train model"""  
     def __init__(self, parent=None):
         super().__init__(parent)
-        layout = QVBoxLayout()
+        
+        # Main container with padding
+        main_layout = QVBoxLayout()
+        main_layout.setContentsMargins(10, 10, 10, 10)
+        main_layout.setSpacing(10)
+        
+        # Plot group
+        plot_group = QGroupBox("EEG Signal Visualization")
+        plot_layout = QVBoxLayout()
+        self.figure = plt.figure(facecolor='white')
+        self.canvas = FigureCanvas(self.figure)
+        plot_layout.addWidget(self.canvas)
+        plot_group.setLayout(plot_layout)
+        main_layout.addWidget(plot_group)
+        
+        # Navigation group
+        nav_group = QGroupBox("Navigation")
+        nav_layout = QHBoxLayout()
+        self.prev_button = QPushButton("◀ Previous")
+        self.next_button = QPushButton("Next ▶")
+        nav_layout.addWidget(self.prev_button)
+        nav_layout.addWidget(self.next_button)
+        nav_group.setLayout(nav_layout)
+        main_layout.addWidget(nav_group)
+        
+        # Control group
+        control_group = QGroupBox("Controls")
+        control_layout = QVBoxLayout()
         self.load_button = QPushButton("Load EEG Data")
-        self.prev_button = QPushButton("Previous Sample")
-        self.next_button = QPushButton("Next Sample")
         self.add_button = QPushButton("Add to Calibration")
         self.train_button = QPushButton("Train Model")
-        # Plot area
-        self.figure = plt.Figure(figsize=(5,3)) if False else plt.figure()
-        self.canvas = FigureCanvas(self.figure)
-        layout.addWidget(self.canvas)
-        layout.addWidget(self.load_button)
-        layout.addWidget(self.prev_button)
-        layout.addWidget(self.next_button)
-        layout.addWidget(self.add_button)
-        layout.addWidget(self.train_button)
-        self.setLayout(layout)
+        control_layout.addWidget(self.load_button)
+        control_layout.addWidget(self.add_button)
+        control_layout.addWidget(self.train_button)
+        control_group.setLayout(control_layout)
+        main_layout.addWidget(control_group)
+        
+        self.setLayout(main_layout)
+        
+        # Style the plot
+        plt.style.use('default')
+        self.figure.patch.set_facecolor('white')
+        
         # Data storage
         self.data = None
         self.labels = None
         self.idx = 0
         self.eeg_channel = None
         self.bci = create_bci_system()
+        
         # Connect signals
         self.load_button.clicked.connect(self.load_data)
         self.prev_button.clicked.connect(self.prev_sample)
         self.next_button.clicked.connect(self.next_sample)
         self.add_button.clicked.connect(self.add_to_calibration)
         self.train_button.clicked.connect(self.train_model)
+        
+        # Initial button states
+        self.prev_button.setEnabled(False)
+        self.next_button.setEnabled(False)
+        self.add_button.setEnabled(False)
+        self.train_button.setEnabled(False)
 
     def load_data(self):
         subject_id, ok = QInputDialog.getInt(self, "Subject ID", "Enter Subject ID:", 1, 1, 109)
         if not ok:
             return
-        X, y, ch = load_local_eeg_data(subject_id, augment=False)
+        X, y, ch = load_local_eeg_data(subject_id, augment=False)  # Changed to no augmentation
         self.data, self.labels, self.eeg_channel = X, y, ch
         self.idx = 0
+        
+        # Initialize BCI model with channel count
+        self.bci.initialize_model(self.eeg_channel)
+        
+        # Enable navigation and control buttons
+        self.prev_button.setEnabled(True)
+        self.next_button.setEnabled(True)
+        self.add_button.setEnabled(True)
+        
         self.update_plot()
 
     def update_plot(self):
+        if self.data is None:
+            return
         self.figure.clear()
         ax = self.figure.add_subplot(111)
         sample = self.data[self.idx]
         for ch in range(sample.shape[0]):
-            ax.plot(sample[ch], alpha=0.5)
-        ax.set_title(f"Sample {self.idx+1}/{len(self.data)} - Label: {self.labels[self.idx]}")
+            ax.plot(sample[ch], alpha=0.5, linewidth=0.5)
+        ax.set_title(f"Sample {self.idx+1}/{len(self.data)} - Label: {'Left' if self.labels[self.idx]==0 else 'Right'}")
         ax.set_xlabel("Time")
         ax.set_ylabel("Amplitude")
+        ax.set_facecolor('lightgray')
         self.canvas.draw()
 
     def prev_sample(self):
@@ -86,80 +133,130 @@ class CalibrationWidget(QWidget):
         if self.data is None:
             return
         self.bci.add_calibration_sample(self.data[self.idx], int(self.labels[self.idx]))
+        self.train_button.setEnabled(True)  # Enable train button after adding samples
+        QMessageBox.information(self, "Success", "Sample added to calibration set")
 
     def train_model(self):
         if self.bci and self.eeg_channel:
-            self.bci.initialize_model(self.eeg_channel)
-            # Launch training in separate thread or directly
-            self.bci.train_calibration(num_epochs=10, batch_size=4, learning_rate=1e-3)
-            # Could display training plot
+            try:
+                self.bci.train_calibration(num_epochs=10, batch_size=4, learning_rate=1e-3)
+                QMessageBox.information(self, "Success", "Model training completed successfully")
+            except Exception as e:
+                QMessageBox.warning(self, "Error", f"Training failed: {str(e)}")
 
 class RealUseWidget(QWidget):
     """Widget for real-use mode: navigate samples, classify, and stream LSL"""
     def __init__(self, parent=None):
         super().__init__(parent)
+        
+        # Main layout with padding
         layout = QVBoxLayout()
-        self.load_button = QPushButton("Load EEG Data")
-        self.prev_button = QPushButton("Previous Sample")
-        self.next_button = QPushButton("Next Sample")
-        self.classify_button = QPushButton("Classify Movement")
-        # Plot area
-        self.figure = plt.figure()
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(10)
+        
+        # EEG Visualization group
+        plot_group = QGroupBox("EEG Signal Visualization")
+        plot_layout = QVBoxLayout()
+        self.figure = plt.figure(facecolor='white')
         self.canvas = FigureCanvas(self.figure)
-        # Result labels
+        plot_layout.addWidget(self.canvas)
+        plot_group.setLayout(plot_layout)
+        layout.addWidget(plot_group)
+        
+        # Result group
+        result_group = QGroupBox("Classification Results")
+        result_layout = QVBoxLayout()
         self.true_label_label = QLabel("True: N/A")
         self.pred_label_label = QLabel("Predicted: N/A")
         self.confidence_label = QLabel("Confidence: N/A")
-        # Streaming controls (to be implemented)
+        for label in [self.true_label_label, self.pred_label_label, self.confidence_label]:
+            label.setStyleSheet("font-size: 14px; padding: 5px;")
+            result_layout.addWidget(label)
+        result_group.setLayout(result_layout)
+        layout.addWidget(result_group)
+        
+        # Control group
+        control_group = QGroupBox("Controls")
+        control_layout = QVBoxLayout()
+        
+        # Navigation controls
+        nav_layout = QHBoxLayout()
+        self.load_button = QPushButton("Load EEG Data")
+        self.prev_button = QPushButton("◀ Previous")
+        self.next_button = QPushButton("Next ▶")
+        self.classify_button = QPushButton("Classify Movement")
+        nav_layout.addWidget(self.load_button)
+        nav_layout.addWidget(self.prev_button)
+        nav_layout.addWidget(self.next_button)
+        nav_layout.addWidget(self.classify_button)
+        control_layout.addLayout(nav_layout)
+        
+        # Streaming controls
+        stream_layout = QHBoxLayout()
         self.stream_start_button = QPushButton("Start Stream")
         self.stream_stop_button = QPushButton("Stop Stream")
-        # Add widgets
-        layout.addWidget(self.load_button)
-        layout.addWidget(self.canvas)
-        layout.addWidget(self.true_label_label)
-        layout.addWidget(self.pred_label_label)
-        layout.addWidget(self.confidence_label)
-        hl = QHBoxLayout()
-        hl.addWidget(self.prev_button)
-        hl.addWidget(self.next_button)
-        hl.addWidget(self.classify_button)
-        layout.addLayout(hl)
-        layout.addWidget(self.stream_start_button)
-        layout.addWidget(self.stream_stop_button)
+        stream_layout.addWidget(self.stream_start_button)
+        stream_layout.addWidget(self.stream_stop_button)
+        control_layout.addLayout(stream_layout)
+        
+        control_group.setLayout(control_layout)
+        layout.addWidget(control_group)
+        
         self.setLayout(layout)
+        
         # Data storage
         self.data = None
         self.labels = None
         self.idx = 0
         self.eeg_channel = None
         self.bci = create_bci_system()
+        
         # Connect signals
         self.load_button.clicked.connect(self.load_data)
         self.prev_button.clicked.connect(self.prev_sample)
         self.next_button.clicked.connect(self.next_sample)
         self.classify_button.clicked.connect(self.classify_movement)
-        # Stream signals (to implement)
+        
+        # Also connect stream buttons
+        self.stream_start_button.clicked.connect(self.start_stream)
+        self.stream_stop_button.clicked.connect(self.stop_stream)
+        
+        # Initial button states
+        self.prev_button.setEnabled(False)
+        self.next_button.setEnabled(False)
+        self.classify_button.setEnabled(False)
+        self.stream_stop_button.setEnabled(False)
 
     def load_data(self):
         subject_id, ok = QInputDialog.getInt(self, "Subject ID", "Enter Subject ID:", 1, 1, 109)
         if not ok:
             return
-        X, y, ch = load_local_eeg_data(subject_id, augment=False)
+        X, y, ch = load_local_eeg_data(subject_id, augment=False)  # Changed to no augmentation
         self.data, self.labels, self.eeg_channel = X, y, ch
         self.idx = 0
-        # Initialize model with channel count
+        
+        # Initialize BCI model with channel count
         self.bci.initialize_model(self.eeg_channel)
+        
+        # Enable navigation and control buttons
+        self.prev_button.setEnabled(True)
+        self.next_button.setEnabled(True)
+        self.classify_button.setEnabled(self.bci.is_calibrated)  # Only enable if model is calibrated
+        
         self.update_plot()
 
     def update_plot(self):
+        if self.data is None:
+            return
         self.figure.clear()
         ax = self.figure.add_subplot(111)
         sample = self.data[self.idx]
         for ch in range(sample.shape[0]):
-            ax.plot(sample[ch], alpha=0.5)
-        ax.set_title(f"Sample {self.idx+1}/{len(self.data)} - True: {'Left' if self.labels[self.idx]==0 else 'Right'}")
+            ax.plot(sample[ch], alpha=0.5, linewidth=0.5)
+        ax.set_title(f"Sample {self.idx+1}/{len(self.data)} - Label: {'Left' if self.labels[self.idx]==0 else 'Right'}")
         ax.set_xlabel("Time")
         ax.set_ylabel("Amplitude")
+        ax.set_facecolor('lightgray')
         self.canvas.draw()
 
     def prev_sample(self):
@@ -174,81 +271,125 @@ class RealUseWidget(QWidget):
         self.idx = min(len(self.data)-1, self.idx + 1)
         self.update_plot()
 
+    def start_stream(self):
+        """Handle start of LSL stream"""
+        streams = resolve_streams(wait_time=1.0)
+        eeg_streams = [s for s in streams if s.type() == 'EEG']
+        if eeg_streams:
+            # Enable stop button and disable start button
+            self.stream_start_button.setEnabled(False)
+            self.stream_stop_button.setEnabled(True)
+            QMessageBox.information(self, "Stream Started", "Successfully connected to EEG stream")
+        else:
+            QMessageBox.warning(self, "No Stream Found", "Could not find any EEG stream")
+
+    def stop_stream(self):
+        """Handle stop of LSL stream"""
+        # Reset stream controls
+        self.stream_start_button.setEnabled(True)
+        self.stream_stop_button.setEnabled(False)
+        QMessageBox.information(self, "Stream Stopped", "Disconnected from EEG stream")
+
     def classify_movement(self):
-        if self.data is None or not self.bci.is_calibrated:
+        if self.data is None:
             return
-        sample = self.data[self.idx]
-        pred, conf = self.bci.predict_movement(sample)
-        self.true_label_label.setText(f"True: {'Left' if self.labels[self.idx]==0 else 'Right'}")
-        self.pred_label_label.setText(f"Predicted: {pred}")
-        self.confidence_label.setText(f"Confidence: {conf:.2%}")
+        if not self.bci.is_calibrated:
+            QMessageBox.warning(self, "Error", "Model needs to be calibrated first")
+            return
+            
+        try:
+            pred, conf = self.bci.predict_movement(self.data[self.idx])
+            self.true_label_label.setText(f"True: {'Left' if self.labels[self.idx]==0 else 'Right'}")
+            self.pred_label_label.setText(f"Predicted: {pred}")
+            self.confidence_label.setText(f"Confidence: {conf:.2%}")
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Classification failed: {str(e)}")
 
 class StreamingWidget(QWidget):
     """Widget for live LSL streaming and real-time EEG plotting"""
     def __init__(self, parent=None):
         super().__init__(parent)
-        # Main panel for streaming widget
-        main_group = QGroupBox("Streaming Panel")
-        layout = QVBoxLayout(main_group)
-        # Plot area with scrollable canvas
-        plot_group = QGroupBox("EEG Plot")
-        plot_layout = QVBoxLayout(plot_group)
-        self.figure = plt.figure()
+        
+        # Main layout with padding
+        main_layout = QVBoxLayout()
+        main_layout.setContentsMargins(10, 10, 10, 10)
+        main_layout.setSpacing(10)
+        
+        # Plot group
+        plot_group = QGroupBox("EEG Signal Monitor")
+        plot_layout = QVBoxLayout()
+        self.figure = plt.figure(facecolor='white')
         self.canvas = FigureCanvas(self.figure)
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setWidget(self.canvas)
         plot_layout.addWidget(self.scroll)
-        layout.addWidget(plot_group)
+        plot_group.setLayout(plot_layout)
+        main_layout.addWidget(plot_group)
         
-        # Control buttons and options
-        control_group = QGroupBox("Controls")
-        control_layout = QHBoxLayout(control_group)
+        # Status group
+        status_group = QGroupBox("Prediction Status")
+        status_layout = QHBoxLayout()
+        self.pred_label = QLabel("Pred: N/A")
+        self.conf_label = QLabel("Conf: N/A")
+        self.pred_label.setStyleSheet("font-size: 14px; padding: 5px;")
+        self.conf_label.setStyleSheet("font-size: 14px; padding: 5px;")
+        status_layout.addWidget(self.pred_label)
+        status_layout.addWidget(self.conf_label)
+        status_group.setLayout(status_layout)
+        main_layout.addWidget(status_group)
+        
+        # Control group
+        control_group = QGroupBox("Stream Controls")
+        control_layout = QVBoxLayout()
+        
+        # Stream controls row
+        stream_layout = QHBoxLayout()
         self.start_btn = QPushButton("Start Streaming")
         self.stop_btn = QPushButton("Stop Streaming")
         self.stop_btn.setEnabled(False)
-        self.process_check = QCheckBox("Enable Additional Processing")
-        self.process_check.setChecked(False)
-        control_layout.addWidget(self.start_btn)
-        control_layout.addWidget(self.stop_btn)
-        control_layout.addWidget(self.process_check)
-        self.capture_button = QPushButton("Capture 5s")
-        control_layout.addWidget(self.capture_button)
-        layout.addWidget(control_group)
-        # Prediction display
-        self.pred_label = QLabel("Pred: N/A")
-        self.conf_label = QLabel("Conf: N/A")
-         
-        layout.addWidget(self.pred_label)
-        layout.addWidget(self.conf_label)
-        self.setLayout(layout)
-        # Add main_group as widget layout
-        outer_layout = QVBoxLayout(self)
-        outer_layout.addWidget(main_group)
-        self.setLayout(outer_layout)
+        stream_layout.addWidget(self.start_btn)
+        stream_layout.addWidget(self.stop_btn)
+        control_layout.addLayout(stream_layout)
         
-        # LSL inlet and buffer
+        # Processing controls row
+        process_layout = QHBoxLayout()
+        self.process_check = QCheckBox("Enable Signal Processing")
+        self.process_check.setStyleSheet("font-size: 12px; padding: 5px;")
+        self.capture_button = QPushButton("Capture 5s Window")
+        process_layout.addWidget(self.process_check)
+        process_layout.addWidget(self.capture_button)
+        control_layout.addLayout(process_layout)
+        
+        control_group.setLayout(control_layout)
+        main_layout.addWidget(control_group)
+        
+        self.setLayout(main_layout)
+        
+        # LSL inlet and buffer setup
         self.inlet = None
         self.buffer = None
         self.timer = QTimer(self)
-        self.timer.setInterval(20)  # ms for higher frame rate
-        # Capture state variables
+        self.timer.setInterval(20)
+        
+        # Capture variables
         self.capturing = False
         self.capture_buffer = []
         self.sample_count = 0
         self.capture_needed = 0
         
-        # Signals
+        # Connect signals
         self.start_btn.clicked.connect(self.start_stream)
         self.stop_btn.clicked.connect(self.stop_stream)
         self.timer.timeout.connect(self.update_plot)
         self.capture_button.clicked.connect(self.start_capture)
-        # BCISystem for real-time inference
+        
+        # BCI system setup
         self.bci = create_bci_system()
         self.window_size = None
         self.window_step = None
         self.sample_since_last = 0
-        
+
     def start_stream(self):
         logging.info("Starting LSL EEG stream")
         streams = resolve_streams(wait_time=1.0)
@@ -378,18 +519,34 @@ class StreamingWidget(QWidget):
                     aug_data = EEGAugmentation.time_shift(window_data)
                     aug_data = EEGAugmentation.add_gaussian_noise(aug_data)
                     aug_data = EEGAugmentation.scale_amplitude(aug_data)
-                    # Save window plot for analysis
+                    
+                    # Save window plot for analysis with matching style
                     os.makedirs('window_plots', exist_ok=True)
-                    fig, axs = plt.subplots(len(self.buffer), 1, figsize=(10, len(self.buffer)*2))
-                    for i, ax in enumerate(axs):
-                        ax.plot(aug_data[i], color='blue')
-                        ax.set_ylabel(f'Ch {i+1}')
-                    fig.tight_layout()
-                    filename = datetime.now().strftime("window_plots/window_%Y%m%d_%H%M%S_%f.png")
-                    fig.savefig(filename)
-                    plt.close(fig)
-                    logging.info(f"Saved window plot to {filename}")
+                    plt.style.use('default')  # Reset style
+                    fig = plt.figure(figsize=(10, 6))
+                    ax = fig.add_subplot(111)
+                    
+                    # Plot all channels with alpha for clarity
+                    for ch_idx in range(aug_data.shape[0]):
+                        ax.plot(aug_data[ch_idx], alpha=0.5, linewidth=0.5)
+                    
+                    # Set title and labels
                     pred, conf = self.bci.predict_movement(aug_data)
+                    ax.set_title(f"Real-time Window Classification\nPredicted: {pred} (Confidence: {conf:.2%})")
+                    ax.set_xlabel("Time")
+                    ax.set_ylabel("Amplitude")
+                    
+                    # Set the background color to match
+                    ax.set_facecolor('lightgray')
+                    fig.patch.set_facecolor('white')
+                    
+                    # Save and close
+                    filename = datetime.now().strftime("window_plots/window_%Y%m%d_%H%M%S_%f.png")
+                    plt.tight_layout()
+                    fig.savefig(filename, dpi=300, bbox_inches='tight')
+                    plt.close(fig)
+                    
+                    # Update GUI labels
                     self.pred_label.setText(f"Pred: {pred}")
                     self.conf_label.setText(f"Conf: {conf:.2%}")
                     logging.info(f"Model prediction: {pred} (confidence {conf:.2%}) on window of {self.window_size} samples")
@@ -399,67 +556,179 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("BCI System for Post-Stroke Rehabilitation")
         self.resize(1200, 800)
+        
+        # Set window style to be more like Java Swing
+        self.setStyleSheet("""
+            QMainWindow {
+                background-color: #f0f0f0;
+            }
+            QWidget {
+                background-color: #ffffff;
+            }
+            QPushButton {
+                background-color: #e0e0e0;
+                border: 2px solid #a0a0a0;
+                border-radius: 3px;
+                min-height: 25px;
+                padding: 5px;
+                color: #000000;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #d0d0d0;
+            }
+            QPushButton:pressed {
+                background-color: #c0c0c0;
+            }
+            QPushButton:disabled {
+                background-color: #f0f0f0;
+                border: 2px solid #c0c0c0;
+                color: #808080;
+            }
+            QLabel {
+                color: #000000;
+                font-size: 12px;
+                padding: 2px;
+            }
+            QGroupBox {
+                background-color: #ffffff;
+                border: 1px solid #c0c0c0;
+                border-radius: 5px;
+                margin-top: 1ex;
+                font-weight: bold;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                subcontrol-position: top center;
+                padding: 0 3px;
+                color: #505050;
+            }
+        """)
 
         # Central widget with stacked layout for modes
+        central_widget = QWidget()
+        central_widget.setStyleSheet("background-color: #f0f0f0; padding: 10px;")
+        self.setCentralWidget(central_widget)
+        
+        main_layout = QVBoxLayout(central_widget)
+        
+        # Add a header panel
+        header = QWidget()
+        header.setStyleSheet("""
+            QWidget {
+                background-color: #4a6984;
+                border-radius: 5px;
+                margin: 0px;
+                padding: 10px;
+            }
+            QLabel {
+                color: white;
+                font-size: 16px;
+                font-weight: bold;
+            }
+        """)
+        header_layout = QHBoxLayout(header)
+        header_label = QLabel("BCI System Control Panel")
+        header_layout.addWidget(header_label)
+        main_layout.addWidget(header)
+
+        # Toolbar for mode selection styled like old Java tabs
+        tab_bar = QWidget()
+        tab_bar.setStyleSheet("""
+            QWidget {
+                background-color: #e8e8e8;
+                border-bottom: 1px solid #c0c0c0;
+            }
+            QPushButton {
+                background-color: #f5f5f5;
+                border: 1px solid #c0c0c0;
+                border-bottom: none;
+                border-radius: 3px 3px 0 0;
+                min-width: 100px;
+                padding: 5px 15px;
+            }
+            QPushButton:checked {
+                background-color: #ffffff;
+                border-bottom: 1px solid #ffffff;
+            }
+        """)
+        tab_layout = QHBoxLayout(tab_bar)
+        tab_layout.setSpacing(0)
+        tab_layout.setContentsMargins(10, 5, 10, 0)
+        
+        # Create tab buttons
+        self.calib_button = QPushButton("Calibration")
+        self.real_button = QPushButton("Real Use")
+        self.stream_button = QPushButton("Streaming")
+        self.calib_button.setCheckable(True)
+        self.real_button.setCheckable(True)
+        self.stream_button.setCheckable(True)
+        self.calib_button.setChecked(True)
+        
+        tab_layout.addWidget(self.calib_button)
+        tab_layout.addWidget(self.real_button)
+        tab_layout.addWidget(self.stream_button)
+        tab_layout.addStretch()
+        main_layout.addWidget(tab_bar)
+
+        # Stacked widget for content
         self.stacked = QStackedWidget()
+        self.stacked.setStyleSheet("""
+            QStackedWidget {
+                background-color: #ffffff;
+                border: 1px solid #c0c0c0;
+                border-top: none;
+            }
+        """)
         self.calib_widget = CalibrationWidget()
         self.real_widget = RealUseWidget()
         self.stream_widget = StreamingWidget()
         self.stacked.addWidget(self.calib_widget)
         self.stacked.addWidget(self.real_widget)
         self.stacked.addWidget(self.stream_widget)
-        self.setCentralWidget(self.stacked)
+        main_layout.addWidget(self.stacked)
 
-        # Toolbar for mode selection
-        self.toolbar = self.addToolBar("Mode")
-        self.calib_action = self.toolbar.addAction("Calibration")
-        self.real_action = self.toolbar.addAction("Real Use")
-        self.stream_action = self.toolbar.addAction("Streaming")
-        self.calib_action.triggered.connect(lambda: self.switch_mode(0))
-        self.real_action.triggered.connect(lambda: self.switch_mode(1))
-        self.stream_action.triggered.connect(lambda: self.switch_mode(2))
+        # Connect tab buttons
+        self.calib_button.clicked.connect(lambda: self.switch_mode(0))
+        self.real_button.clicked.connect(lambda: self.switch_mode(1))
+        self.stream_button.clicked.connect(lambda: self.switch_mode(2))
 
     def switch_mode(self, index: int):
         self.stacked.setCurrentIndex(index)
+        # Update tab button states
+        self.calib_button.setChecked(index == 0)
+        self.real_button.setChecked(index == 1)
+        self.stream_button.setChecked(index == 2)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    # Set Fusion style for consistency
     app.setStyle(QStyleFactory.create('Fusion'))
-    # Dark palette
-    dark_palette = QPalette()
-    dark_palette.setColor(QPalette.Window, QColor(53,53,53))
-    dark_palette.setColor(QPalette.WindowText, QColor(255,255,255))
-    dark_palette.setColor(QPalette.Base, QColor(25,25,25))
-    dark_palette.setColor(QPalette.AlternateBase, QColor(53,53,53))
-    dark_palette.setColor(QPalette.ToolTipBase, QColor(255,255,255))
-    dark_palette.setColor(QPalette.ToolTipText, QColor(255,255,255))
-    dark_palette.setColor(QPalette.Text, QColor(255,255,255))
-    dark_palette.setColor(QPalette.Button, QColor(53,53,53))
-    dark_palette.setColor(QPalette.ButtonText, QColor(255,255,255))
-    dark_palette.setColor(QPalette.BrightText, QColor(255,0,0))
-    app.setPalette(dark_palette)
-    # Global style sheet
-    app.setStyleSheet("""
-        QPushButton {
-            min-height: 36px;
-            font-size: 14px;
-            background-color: #29a19c;
-            color: #ffffff;
-            border-radius: 6px;
-            margin: 4px;
-        }
-        QPushButton:disabled {
-            background-color: #555555;
-        }
-        QLabel {
-            font-size: 14px;
-            margin: 2px;
-        }
-        QScrollArea, QWidget {
-            background-color: #2e2e2e;
-        }
-    """)
+    
+    # Remove dark palette settings and use classic light theme
     win = MainWindow()
     win.show()
     sys.exit(app.exec_())
+
+class ModelWrapper:
+    # ...existing ModelWrapper code...
+
+    def configure_optimizers(self):
+        # Added weight_decay for L2 regularization
+        optimizer = optim.Adam(
+            self.parameters(),
+            lr=self.lr,
+            weight_decay=0.01  # L2 regularization factor
+        )
+        lr_scheduler = {
+            "scheduler": optim.lr_scheduler.MultiStepLR(
+                optimizer,
+                milestones=[
+                    int(self.max_epoch * 0.25),
+                    int(self.max_epoch * 0.5),
+                    int(self.max_epoch * 0.75),
+                ],
+                gamma=0.1
+            ),
+            "name": "lr_scheduler",
+        }
+        return [optimizer], [lr_scheduler]
