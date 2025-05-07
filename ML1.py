@@ -611,8 +611,8 @@ class BCISystem:
             prob = torch.sigmoid(torch.tensor(logit)).item()
             
             # Calculate confidences for Left and Right
-            left_confidence = (1 - prob)  # Scale to percentage
-            right_confidence = prob  # Scale to percentage
+            left_confidence = (1 - prob) /100 # Scale to percentage
+            right_confidence = prob / 100 # Scale to percentage
             
             # Calculate uncertain confidence - higher when both left/right are close to 50%
             confidence_diff = abs(left_confidence - right_confidence)
@@ -622,7 +622,7 @@ class BCISystem:
             MIN_CONFIDENCE = 40
             
             # If the difference between left/right is small, predict uncertain
-            if uncertain_confidence > 40:  # confidence_diff < 60
+            if uncertain_confidence > 50:  # confidence_diff < 60
                 return "Uncertain", uncertain_confidence
             
             # Otherwise return the highest confidence prediction if it meets threshold
