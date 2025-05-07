@@ -6,6 +6,9 @@ from torch.utils.data import TensorDataset, DataLoader
 import torch.optim as optim
 import torch.nn.functional as F
 import pytorch_lightning as L
+from pytorch_lightning import Trainer
+from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
+from pytorch_lightning.loggers import TensorBoardLogger
 import torchmetrics
 import numpy as np
 import math
@@ -34,10 +37,10 @@ class PositionalEncoding(nn.Module):
     def __init__(self, d_model, dropout=0.1, max_len=5000):
         super().__init__()
         self.dropout = nn.Dropout(p=dropout)
-
-        position = torch.arange(max_len).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
+        
         pe = torch.zeros(max_len, 1, d_model)
+        position = torch.arange(0, max_len).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2) * -(math.log(10000.0) / d_model))
         pe[:, 0, 0::2] = torch.sin(position * div_term)
         pe[:, 0, 1::2] = torch.cos(position * div_term)
         self.register_buffer('pe', pe)
@@ -47,103 +50,66 @@ class PositionalEncoding(nn.Module):
         return self.dropout(x)
 
 class TransformerBlock(nn.Module):
-    def __init__(self, input_dim, num_heads, dim_feedforward, dropout=0.1):
+    def __init__(self, embed_dim, num_heads, dim_feedforward, dropout=0.1):
         super().__init__()
-        self.attention = nn.MultiheadAttention(input_dim, num_heads, dropout=dropout)
-        self.norm1 = nn.LayerNorm(input_dim)
-        self.norm2 = nn.LayerNorm(input_dim)
-        self.feed_forward = nn.Sequential(
-            nn.Linear(input_dim, dim_feedforward),
-            nn.ReLU(),
+        
+        self.attention = nn.MultiheadAttention(embed_dim, num_heads, dropout=dropout, batch_first=True)
+        self.mlp = nn.Sequential(
+            nn.Linear(embed_dim, dim_feedforward),
+            nn.ReLU(True),
             nn.Dropout(dropout),
-            nn.Linear(dim_feedforward, input_dim),
+            nn.Linear(dim_feedforward, embed_dim),
         )
-        self.dropout = nn.Dropout(dropout)
+        
+        self.layernorm0 = nn.LayerNorm(embed_dim)
+        self.layernorm1 = nn.LayerNorm(embed_dim)
+        self.dropout = dropout
 
     def forward(self, x):
-        # Multi-head attention block
-        attn_output, _ = self.attention(x, x, x)
-        x = x + self.dropout(attn_output)
-        x = self.norm1(x)
-        
-        # Feedforward block
-        ff_output = self.feed_forward(x)
-        x = x + self.dropout(ff_output)
-        x = self.norm2(x)
-        
+        y, _ = self.attention(x, x, x)
+        y = F.dropout(y, self.dropout, training=self.training)
+        x = self.layernorm0(x + y)
+        y = self.mlp(x)
+        y = F.dropout(y, self.dropout, training=self.training)
+        x = self.layernorm1(x + y)
         return x
 
 class EEGClassificationModel(nn.Module):
     def __init__(self, eeg_channel, dropout=0.1):
         super().__init__()
         
-        # First conv block - temporal convolution
-        self.temporal_conv = nn.Sequential(
-            nn.Conv1d(eeg_channel, 25, kernel_size=10, stride=1, padding=5),
-            nn.BatchNorm1d(25),
-            nn.ReLU(),
+        # Improved convolutional layers
+        self.conv = nn.Sequential(
+            nn.Conv1d(eeg_channel, eeg_channel, 11, 1, padding=5, bias=False),
+            nn.BatchNorm1d(eeg_channel),
+            nn.ReLU(True),
+            nn.Dropout1d(dropout),
+            nn.Conv1d(eeg_channel, eeg_channel * 2, 11, 1, padding=5, bias=False),
+            nn.BatchNorm1d(eeg_channel * 2),
         )
         
-        # Second conv block - spatial filter
-        self.spatial_conv = nn.Sequential(
-            nn.Conv1d(25, 25, kernel_size=eeg_channel, groups=25),
-            nn.BatchNorm1d(25),
-            nn.ReLU(),
+        # Add transformer blocks
+        self.transformer = nn.Sequential(
+            PositionalEncoding(eeg_channel * 2, dropout),
+            TransformerBlock(eeg_channel * 2, 4, eeg_channel // 8, dropout),
+            TransformerBlock(eeg_channel * 2, 4, eeg_channel // 8, dropout),
         )
         
-        # Conv Pool Block 1 (25 -> 50)
-        self.conv_pool1 = nn.Sequential(
-            nn.Conv1d(25, 50, kernel_size=10, stride=1, padding=5),
-            nn.BatchNorm1d(50),
-            nn.ReLU(),
-            nn.MaxPool1d(kernel_size=3, stride=3)
-        )
-        
-        # Conv Pool Block 2 (50 -> 100)
-        self.conv_pool2 = nn.Sequential(
-            nn.Conv1d(50, 100, kernel_size=10, stride=1, padding=5),
-            nn.BatchNorm1d(100),
-            nn.ReLU(),
-            nn.MaxPool1d(kernel_size=3, stride=3)
-        )
-        
-        # Conv Pool Block 3 (100 -> 200)
-        self.conv_pool3 = nn.Sequential(
-            nn.Conv1d(100, 200, kernel_size=10, stride=1, padding=5),
-            nn.BatchNorm1d(200),
-            nn.ReLU(),
-            nn.MaxPool1d(kernel_size=3, stride=3)
-        )
-        
-        # Adaptive pooling to handle variable input lengths
-        self.adaptive_pool = nn.AdaptiveAvgPool1d(1)
-        
-        # Final classification layer
-        self.classifier = nn.Sequential(
+        # Simplified MLP head
+        self.mlp = nn.Sequential(
+            nn.Linear(eeg_channel * 2, eeg_channel // 2),
+            nn.ReLU(True),
             nn.Dropout(dropout),
-            nn.Linear(200, 1)  # Binary classification (left vs right hand)
+            nn.Linear(eeg_channel // 2, 1),
         )
 
     def forward(self, x):
-        # Input shape: [batch, channels, time]
-        
-        # Temporal convolution
-        x = self.temporal_conv(x)
-        
-        # Spatial filter
-        x = self.spatial_conv(x)
-        
-        # Conv-pool blocks
-        x = self.conv_pool1(x)
-        x = self.conv_pool2(x)
-        x = self.conv_pool3(x)
-        
-        # Global average pooling
-        x = self.adaptive_pool(x)
-        x = x.view(x.size(0), -1)
-        
-        # Classification
-        x = self.classifier(x)
+        x = self.conv(x)
+        x = x.permute(0, 2, 1)  # Change to (batch, sequence, features)
+        x = self.transformer(x)
+        x = x.permute(0, 2, 1)  # Change back to (batch, features, sequence)
+        x = x.mean(dim=-1)      # Global average pooling
+        x = self.mlp(x)
         return x
 
 class EEGDataset(data.Dataset):
@@ -475,144 +441,93 @@ class BCISystem:
         else:
             ch_count = eeg_channel
         self.eeg_channel = ch_count
-        self.model = EEGClassificationModel(eeg_channel=ch_count, dropout=0.125)
-        self.model = self.model.double()  # Convert model to double precision
-        self.model = self.model.to(self.device)  # Move model to GPU/CPU
+        
+        # Create base model
+        base_model = EEGClassificationModel(eeg_channel=ch_count, dropout=0.125)
+        
+        # Wrap with Lightning module
+        self.model = LightningEEGModel(base_model, learning_rate=5e-4)
+        self.model = self.model.double()
+        self.model = self.model.to(self.device)
         
         if self.model_path and os.path.exists(self.model_path):
-            # Load checkpoint and filter for matching parameter shapes only
-            state = torch.load(self.model_path, map_location=self.device)  # Load to correct device
-            model_dict = self.model.state_dict()
-            filtered_state = {k: v for k, v in state.items()
-                              if k in model_dict and v.size() == model_dict[k].size()}
-            self.model.load_state_dict(filtered_state, strict=False)
-            
-            # Warn about keys not loaded
-            missing = set(model_dict.keys()) - set(filtered_state.keys())
-            unexpected = set(state.keys()) - set(filtered_state.keys())
-            if missing:
-                print(f"Warning: missing keys in checkpoint: {missing}")
-            if unexpected:
-                print(f"Warning: unexpected keys ignored: {unexpected}")
-            # Mark calibrated if any weights loaded
-            self.is_calibrated = len(filtered_state) > 0
+            state = torch.load(self.model_path, map_location=self.device)
+            self.model.load_state_dict(state)
+            self.is_calibrated = True
 
     def add_calibration_sample(self, eeg_data, label):
         """Adiciona uma amostra de calibração"""
         self.calibration_data['X'].append(eeg_data)
         self.calibration_data['y'].append(label)
 
-    def train_calibration(self, num_epochs=100, batch_size=4, learning_rate=1e-3):
-        """Trains the model with the calibration data"""
+    def train_calibration(self, num_epochs=50, batch_size=10, learning_rate=5e-4):
+        """Trains the model with the calibration data using Lightning"""
         if len(self.calibration_data['X']) < 2:
             raise ValueError("Need at least 2 calibration samples")
 
         X = np.array(self.calibration_data['X'])
         y = np.array(self.calibration_data['y'])
         
-        # Split data into train and validation sets
+        # Create datasets
         train_size = int(0.8 * len(X))
         indices = torch.randperm(len(X))
         train_indices = indices[:train_size]
         val_indices = indices[train_size:]
 
-        # Create train and validation datasets
         X_train, y_train = X[train_indices], y[train_indices]
         X_val, y_val = X[val_indices], y[val_indices]
-
-        # Adjust batch size if we have few samples
-        actual_batch_size = min(batch_size, len(X_train))
-
-        # Prepare data loaders
+        
         train_dataset = TensorDataset(torch.DoubleTensor(X_train), torch.DoubleTensor(y_train))
         val_dataset = TensorDataset(torch.DoubleTensor(X_val), torch.DoubleTensor(y_val))
         
-        train_loader = DataLoader(train_dataset, batch_size=actual_batch_size, shuffle=True)
-        val_loader = DataLoader(val_dataset, batch_size=actual_batch_size)
+        # Create data loaders
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        val_loader = DataLoader(val_dataset, batch_size=batch_size)
 
-        # Initialize training components
-        criterion = nn.BCEWithLogitsLoss()
-        optimizer = optim.Adam(self.model.parameters(), lr=learning_rate, weight_decay=0.01)
-        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
-        tracker = ModelTracker(log_dir="training_runs")
+        # Configure training
+        logger = TensorBoardLogger("lightning_logs", name="bci_model")
+        early_stopping = EarlyStopping(
+            monitor="val_loss",
+            patience=3,
+            verbose=True,
+            mode="min"
+        )
+        checkpoint_callback = ModelCheckpoint(
+            dirpath="checkpoints",
+            filename="best_model",
+            save_top_k=1,
+            monitor="val_loss",
+            mode="min"
+        )
 
-        # Training loop
-        best_val_loss = float('inf')
-        patience = 7
-        no_improve = 0
+        # Initialize trainer
+        trainer = Trainer(
+            max_epochs=num_epochs,
+            accelerator="auto",
+            devices=1,
+            logger=logger,
+            callbacks=[early_stopping, checkpoint_callback],
+            log_every_n_steps=1
+        )
 
-        for epoch in range(num_epochs):
-            # Training phase
-            self.model.train()
-            train_loss = 0.0
-            train_preds = []
-            train_labels = []
-            
-            for inputs, labels in train_loader:
-                inputs = inputs.to(self.device)
-                labels = labels.to(self.device)
-                
-                optimizer.zero_grad()
-                outputs = self.model(inputs)  # Shape: [batch_size, 1]
-                outputs = outputs.view(-1)    # Flatten to [batch_size]
-                labels = labels.float()
-                
-                loss = criterion(outputs, labels)
-                loss.backward()
-                optimizer.step()
-                
-                train_loss += loss.item()
-                train_preds.extend(outputs.detach().cpu())
-                train_labels.extend(labels.cpu())
-            
-            train_loss /= len(train_loader)
-            train_preds = torch.stack(train_preds)
-            train_labels = torch.stack(train_labels)
-            tracker.log_metrics('train', train_loss, train_preds, train_labels, epoch)
+        # Train the model
+        trainer.fit(
+            self.model,
+            train_dataloaders=train_loader,
+            val_dataloaders=val_loader
+        )
 
-            # Validation phase
-            self.model.eval()
-            val_loss = 0.0
-            val_preds = []
-            val_labels = []
-            
-            with torch.no_grad():
-                for inputs, labels in val_loader:
-                    inputs = inputs.to(self.device)
-                    labels = labels.to(self.device)
-                    
-                    outputs = self.model(inputs)  # Shape: [batch_size, 1]
-                    outputs = outputs.view(-1)    # Flatten to [batch_size]
-                    labels = labels.float()
-                    
-                    loss = criterion(outputs, labels)
-                    
-                    val_loss += loss.item()
-                    val_preds.extend(outputs.detach().cpu())
-                    val_labels.extend(labels.cpu())
-            
-            val_loss /= len(val_loader)
-            val_preds = torch.stack(val_preds)
-            val_labels = torch.stack(val_labels)
-            tracker.log_metrics('val', val_loss, val_preds, val_labels, epoch)
-
-            # Rest of the training loop...
-            scheduler.step(val_loss)
-
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
-                no_improve = 0
-                if self.model_path:
-                    torch.save(self.model.state_dict(), self.model_path)
-            else:
-                no_improve += 1
-
-            if no_improve >= patience:
-                print(f"Early stopping triggered after epoch {epoch+1}")
-                break
-
+        # Load best model
+        self.model = self.model.load_from_checkpoint(
+            checkpoint_callback.best_model_path,
+            model=self.model.model,
+            learning_rate=learning_rate
+        )
+        
+        if self.model_path:
+            torch.save(self.model.state_dict(), self.model_path)
+        
         self.is_calibrated = True
-        return tracker.plot_training_history()
 
     def predict_movement(self, eeg_data):
         """Predicts imagined movement from EEG data with confidence scores for all outcomes"""
@@ -805,7 +720,7 @@ class MultiSubjectTest:
         
         return final_train_X, final_train_y, final_test_X, final_test_y
 
-    def train_and_evaluate(self, num_epochs=20, batch_size=32, learning_rate=1e-3):
+    def train_and_evaluate(self, num_epochs=20, batch_size=10, learning_rate=5e-4):
         """Train on collected samples and evaluate performance"""
         try:
             print("\nStarting training and evaluation process...")
@@ -902,4 +817,52 @@ class MultiSubjectTest:
         except Exception as e:
             print(f"\nError during training: {str(e)}")
             raise
+
+class LightningEEGModel(L.LightningModule):
+    def __init__(self, model, learning_rate=5e-4):
+        super().__init__()
+        self.model = model
+        self.learning_rate = learning_rate
+        self.train_accuracy = torchmetrics.Accuracy(task='binary')
+        self.val_accuracy = torchmetrics.Accuracy(task='binary')
+        
+    def forward(self, x):
+        return self.model(x)
+    
+    def training_step(self, batch, batch_idx):
+        x, y = batch
+        y_hat = self(x)
+        loss = F.binary_cross_entropy_with_logits(y_hat.view(-1), y.float())
+        acc = self.train_accuracy(y_hat.view(-1), y)
+        self.log('train_loss', loss, prog_bar=True)
+        self.log('train_acc', acc, prog_bar=True)
+        return loss
+    
+    def validation_step(self, batch, batch_idx):
+        x, y = batch
+        y_hat = self(x)
+        loss = F.binary_cross_entropy_with_logits(y_hat.view(-1), y.float())
+        acc = self.val_accuracy(y_hat.view(-1), y)
+        self.log('val_loss', loss, prog_bar=True)
+        self.log('val_acc', acc, prog_bar=True)
+        return loss
+    
+    def configure_optimizers(self):
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
+        scheduler = torch.optim.lr_scheduler.MultiStepLR(
+            optimizer,
+            milestones=[
+                int(self.trainer.max_epochs * 0.25),
+                int(self.trainer.max_epochs * 0.5),
+                int(self.trainer.max_epochs * 0.75)
+            ],
+            gamma=0.1
+        )
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "monitor": "val_loss"
+            }
+        }
 

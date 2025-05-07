@@ -139,7 +139,7 @@ class CalibrationWidget(QWidget):
     def train_model(self):
         if self.bci and self.eeg_channel:
             try:
-                self.bci.train_calibration(num_epochs=100, batch_size=4, learning_rate=1e-3)
+                self.bci.train_calibration(num_epochs=50, batch_size=10, learning_rate=5e-4)
                 QMessageBox.information(self, "Success", "Model training completed successfully")
             except Exception as e:
                 QMessageBox.warning(self, "Error", f"Training failed: {str(e)}")
@@ -633,14 +633,14 @@ class TestWidget(QWidget):
         self.progress_label.setText("This may take a few minutes...")
         
         try:
-            # Initialize test system
-            self.test_system = MultiSubjectTest(train_samples=20, test_samples=10)
+            # Initialize test system with more samples for better learning
+            self.test_system = MultiSubjectTest(train_samples=40, test_samples=20)
             
-            # Run training and evaluation with 100 epochs
+            # Run training and evaluation with improved parameters
             history = self.test_system.train_and_evaluate(
-                num_epochs=100,  # Updated to 100 epochs
-                batch_size=32,
-                learning_rate=1e-3
+                num_epochs=50,      # Updated to 50 epochs
+                batch_size=10,      # Smaller batch size for better learning
+                learning_rate=5e-4  # Lower learning rate for stability
             )
             
             # Update plot with results
