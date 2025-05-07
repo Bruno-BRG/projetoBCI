@@ -61,52 +61,76 @@ class TransformerBlock(nn.Module):
         return x
 
 class EEGClassificationModel(nn.Module):
-    def __init__(self, eeg_channel, dropout=0.5):  # Increased from 0.125 to 0.5
+    def __init__(self, eeg_channel, dropout=0.1):
         super().__init__()
-
-        # Add L2 regularization through weight_decay in optimizer later
-        self.conv = nn.Sequential(
-            nn.Conv1d(eeg_channel, eeg_channel, 11, 1, padding=5, bias=False),
-            nn.BatchNorm1d(eeg_channel),
-            nn.ReLU(True),
-            nn.Dropout1d(dropout),  # Increased dropout
-            nn.Conv1d(eeg_channel, eeg_channel * 2, 11, 1, padding=5, bias=False),
-            nn.BatchNorm1d(eeg_channel * 2),
-            nn.Dropout1d(dropout),  # Added another dropout layer
+        
+        # First conv block - temporal convolution
+        self.temporal_conv = nn.Sequential(
+            nn.Conv1d(eeg_channel, 25, kernel_size=10, stride=1, padding=5),
+            nn.BatchNorm1d(25),
+            nn.ReLU(),
         )
-
-        self.transformer = nn.Sequential(
-            PositionalEncoding(eeg_channel * 2, dropout),
-            TransformerBlock(eeg_channel * 2, 4, eeg_channel // 8, dropout),
-            nn.Dropout(dropout),  # Added dropout between transformer blocks
-            TransformerBlock(eeg_channel * 2, 4, eeg_channel // 8, dropout),
-            nn.Dropout(dropout),  # Added final dropout
+        
+        # Second conv block - spatial filter
+        self.spatial_conv = nn.Sequential(
+            nn.Conv1d(25, 25, kernel_size=eeg_channel, groups=25),
+            nn.BatchNorm1d(25),
+            nn.ReLU(),
         )
-
-        self.mlp = nn.Sequential(
-            nn.Linear(eeg_channel * 2, eeg_channel),  # Made hidden layer wider
-            nn.ReLU(True),
-            nn.Dropout(dropout),  # Increased dropout
-            nn.BatchNorm1d(eeg_channel),  # Added batch norm
-            nn.Linear(eeg_channel, eeg_channel // 2),  # Added extra layer
-            nn.ReLU(True),
+        
+        # Conv Pool Block 1 (25 -> 50)
+        self.conv_pool1 = nn.Sequential(
+            nn.Conv1d(25, 50, kernel_size=10, stride=1, padding=5),
+            nn.BatchNorm1d(50),
+            nn.ReLU(),
+            nn.MaxPool1d(kernel_size=3, stride=3)
+        )
+        
+        # Conv Pool Block 2 (50 -> 100)
+        self.conv_pool2 = nn.Sequential(
+            nn.Conv1d(50, 100, kernel_size=10, stride=1, padding=5),
+            nn.BatchNorm1d(100),
+            nn.ReLU(),
+            nn.MaxPool1d(kernel_size=3, stride=3)
+        )
+        
+        # Conv Pool Block 3 (100 -> 200)
+        self.conv_pool3 = nn.Sequential(
+            nn.Conv1d(100, 200, kernel_size=10, stride=1, padding=5),
+            nn.BatchNorm1d(200),
+            nn.ReLU(),
+            nn.MaxPool1d(kernel_size=3, stride=3)
+        )
+        
+        # Adaptive pooling to handle variable input lengths
+        self.adaptive_pool = nn.AdaptiveAvgPool1d(1)
+        
+        # Final classification layer
+        self.classifier = nn.Sequential(
             nn.Dropout(dropout),
-            nn.BatchNorm1d(eeg_channel // 2),  # Added batch norm
-            nn.Linear(eeg_channel // 2, 1),
+            nn.Linear(200, 1)  # Binary classification (left vs right hand)
         )
 
     def forward(self, x):
-        # Add random noise during training for additional regularization
-        if self.training:
-            noise = torch.randn_like(x) * 0.1
-            x = x + noise
-            
-        x = self.conv(x)
-        x = x.permute(0, 2, 1)
-        x = self.transformer(x)
-        x = x.permute(0, 2, 1)
-        x = x.mean(dim=-1)
-        x = self.mlp(x)
+        # Input shape: [batch, channels, time]
+        
+        # Temporal convolution
+        x = self.temporal_conv(x)
+        
+        # Spatial filter
+        x = self.spatial_conv(x)
+        
+        # Conv-pool blocks
+        x = self.conv_pool1(x)
+        x = self.conv_pool2(x)
+        x = self.conv_pool3(x)
+        
+        # Global average pooling
+        x = self.adaptive_pool(x)
+        x = x.view(x.size(0), -1)
+        
+        # Classification
+        x = self.classifier(x)
         return x
 
 class EEGDataset(data.Dataset):
@@ -231,7 +255,11 @@ def load_and_process_data(subject_id=1, augment=False):  # Changed default to Fa
     X = np.stack(X_list)
     y = np.array(y_list)
     
-    # Removed augmentation code to keep only original samples
+    if augment:
+        # apply augmentation like previous version
+        X = EEGAugmentation.augment_data(X)
+        y = np.repeat(y, EEGAugmentation.augmentation_count+1)
+    
     return X, y, X.shape[1]  # Return data, labels, and channel count
 
 def load_local_eeg_data(subject_id=1, augment=False):
@@ -569,17 +597,28 @@ class BCISystem:
         return tracker.plot_training_history()
 
     def predict_movement(self, eeg_data):
-        """Prediz o movimento imaginado a partir dos dados de EEG"""
+        """Predicts imagined movement from EEG data with uncertainty threshold"""
         if not self.is_calibrated:
-            raise ValueError("Sistema precisa ser calibrado primeiro")
+            raise ValueError("System needs to be calibrated first")
 
         self.model.eval()
         with torch.no_grad():
             input_tensor = torch.DoubleTensor(eeg_data).unsqueeze(0).to(self.device)
             output = self.model(input_tensor)
-            prediction = "Left" if output.item() < 0.5 else "Right"
-            confidence = abs(output.item() - 0.5) * 2
-            confidence = min(1.0, confidence)  # Limita a confiança a 100%
+            val = output.item()
+            
+            # Calculate raw confidence (0 to 1)
+            raw_confidence = abs(val - 0.5) * 2
+            confidence = min(1.0, raw_confidence)
+            
+            # Define confidence threshold for uncertain predictions
+            UNCERTAINTY_THRESHOLD = 0.3  # Adjust this value to control sensitivity
+            
+            if confidence < UNCERTAINTY_THRESHOLD:
+                prediction = "Uncertain"
+            else:
+                prediction = "Left" if val < 0.5 else "Right"
+            
             return prediction, confidence
 
 def create_bci_system(model_path="checkpoints/bci_model.pth"):
@@ -648,4 +687,186 @@ class ModelWrapper(L.LightningModule):
                 "monitor": "val_loss",
             },
         }
+
+class MultiSubjectTest:
+    def __init__(self, train_samples=20, test_samples=10):
+        self.train_samples = train_samples
+        self.test_samples = test_samples
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.model = None
+        self.training_history = {
+            'train_losses': [], 'val_losses': [],
+            'train_accs': [], 'val_accs': []
+        }
+        print(f"\nInitializing MultiSubjectTest with {train_samples} training and {test_samples} test samples per subject")
+        print(f"Using device: {self.device}")
+    
+    def collect_balanced_samples(self, subject_id, n_samples):
+        """Collect balanced samples (equal left/right) from a subject"""
+        try:
+            X, y, ch = load_local_eeg_data(subject_id, augment=False)
+            left_idx = (y == 0).nonzero()[0]
+            right_idx = (y == 1).nonzero()[0]
+            
+            samples_per_class = n_samples // 2
+            if len(left_idx) < samples_per_class or len(right_idx) < samples_per_class:
+                print(f"Subject {subject_id:03d}: Insufficient samples (L:{len(left_idx)}, R:{len(right_idx)})")
+                return None, None
+                
+            selected_left = np.random.choice(left_idx, samples_per_class, replace=False)
+            selected_right = np.random.choice(right_idx, samples_per_class, replace=False)
+            
+            selected_idx = np.concatenate([selected_left, selected_right])
+            print(f"Subject {subject_id:03d}: Successfully collected {n_samples} balanced samples")
+            return X[selected_idx], y[selected_idx]
+        except Exception as e:
+            print(f"Subject {subject_id:03d}: Error loading data - {str(e)}")
+            return None, None
+
+    def prepare_datasets(self):
+        """Prepare training and testing datasets from multiple subjects"""
+        print("\nStarting dataset preparation...")
+        train_X, train_y = [], []
+        test_X, test_y = [], []
+        
+        successful_subjects = 0
+        total_subjects = 0
+        
+        # Try subjects from 1 to 109 (maximum in dataset)
+        for subject_id in range(1, 110):
+            total_subjects += 1
+            try:
+                print(f"\nProcessing Subject {subject_id:03d}...")
+                
+                # Get training samples
+                X_train, y_train = self.collect_balanced_samples(subject_id, self.train_samples)
+                if X_train is not None:
+                    train_X.append(X_train)
+                    train_y.append(y_train)
+                    
+                    # Get testing samples (different from training)
+                    X_test, y_test = self.collect_balanced_samples(subject_id, self.test_samples)
+                    if X_test is not None:
+                        test_X.append(X_test)
+                        test_y.append(y_test)
+                        successful_subjects += 1
+                
+            except Exception as e:
+                print(f"Error processing subject {subject_id}: {str(e)}")
+                continue
+        
+        if not train_X or not test_X:
+            raise ValueError("Could not collect enough samples from any subject")
+            
+        final_train_X = np.concatenate(train_X)
+        final_train_y = np.concatenate(train_y)
+        final_test_X = np.concatenate(test_X)
+        final_test_y = np.concatenate(test_y)
+        
+        print(f"\nDataset preparation completed:")
+        print(f"Successfully processed {successful_subjects} out of {total_subjects} subjects")
+        print(f"Total training samples: {len(final_train_X)}")
+        print(f"Total testing samples: {len(final_test_X)}")
+        print(f"Training data shape: {final_train_X.shape}")
+        print(f"Testing data shape: {final_test_X.shape}")
+        
+        return final_train_X, final_train_y, final_test_X, final_test_y
+
+    def train_and_evaluate(self, num_epochs=20, batch_size=32, learning_rate=1e-3):
+        """Train on collected samples and evaluate performance"""
+        try:
+            print("\nStarting training and evaluation process...")
+            print(f"Parameters: epochs={num_epochs}, batch_size={batch_size}, lr={learning_rate}")
+            
+            # Prepare datasets
+            print("\nPreparing datasets...")
+            train_X, train_y, test_X, test_y = self.prepare_datasets()
+            
+            # Initialize model
+            print("\nInitializing model...")
+            self.model = EEGClassificationModel(eeg_channel=train_X.shape[1])
+            self.model = self.model.double().to(self.device)
+            
+            # Convert to tensors
+            train_X = torch.from_numpy(train_X).to(self.device)
+            train_y = torch.from_numpy(train_y).to(self.device)
+            test_X = torch.from_numpy(test_X).to(self.device)
+            test_y = torch.from_numpy(test_y).to(self.device)
+            
+            # Create data loaders
+            print("\nCreating data loaders...")
+            train_dataset = TensorDataset(train_X, train_y)
+            test_dataset = TensorDataset(test_X, test_y)
+            train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+            test_loader = DataLoader(test_dataset, batch_size=batch_size)
+            
+            # Training setup
+            criterion = nn.BCEWithLogitsLoss()
+            optimizer = optim.Adam(self.model.parameters(), lr=learning_rate)
+            print("\nStarting training loop...")
+            
+            # Training loop
+            for epoch in range(num_epochs):
+                # Training phase
+                self.model.train()
+                train_loss = 0.0
+                train_correct = 0
+                train_total = 0
+                
+                print(f"\nEpoch {epoch+1}/{num_epochs}")
+                print("Training phase...")
+                
+                for batch_idx, (inputs, labels) in enumerate(train_loader):
+                    optimizer.zero_grad()
+                    outputs = self.model(inputs).squeeze()
+                    loss = criterion(outputs, labels.float())
+                    loss.backward()
+                    optimizer.step()
+                    
+                    train_loss += loss.item()
+                    pred = (outputs > 0.5).float()
+                    train_correct += (pred == labels).sum().item()
+                    train_total += labels.size(0)
+                    
+                    if (batch_idx + 1) % 10 == 0:
+                        print(f"  Batch {batch_idx+1}/{len(train_loader)}")
+                
+                avg_train_loss = train_loss / len(train_loader)
+                train_acc = train_correct / train_total
+                
+                # Validation phase
+                print("Validation phase...")
+                self.model.eval()
+                val_loss = 0.0
+                val_correct = 0
+                val_total = 0
+                
+                with torch.no_grad():
+                    for batch_idx, (inputs, labels) in enumerate(test_loader):
+                        outputs = self.model(inputs).squeeze()
+                        loss = criterion(outputs, labels.float())
+                        val_loss += loss.item()
+                        pred = (outputs > 0.5).float()
+                        val_correct += (pred == labels).sum().item()
+                        val_total += labels.size(0)
+                
+                avg_val_loss = val_loss / len(test_loader)
+                val_acc = val_correct / val_total
+                
+                # Store metrics
+                self.training_history['train_losses'].append(avg_train_loss)
+                self.training_history['val_losses'].append(avg_val_loss)
+                self.training_history['train_accs'].append(train_acc)
+                self.training_history['val_accs'].append(val_acc)
+                
+                print(f"Epoch {epoch+1} Results:")
+                print(f"  Train Loss: {avg_train_loss:.4f}, Train Acc: {train_acc:.2%}")
+                print(f"  Val Loss: {avg_val_loss:.4f}, Val Acc: {val_acc:.2%}")
+            
+            print("\nTraining completed successfully!")
+            return self.training_history
+            
+        except Exception as e:
+            print(f"\nError during training: {str(e)}")
+            raise
 
