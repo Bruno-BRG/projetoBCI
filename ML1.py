@@ -362,7 +362,7 @@ class ModelTracker:
         """Plot training history"""
         # Load and return the saved plot
         img_path = os.path.join(self.plot_dir, 'training_metrics.png')
-        if os.path.exists(img_path):
+        if (os.path.exists(img_path)):
             return plt.imread(img_path)
         else:
             return self.save_training_plots()
@@ -597,7 +597,7 @@ class BCISystem:
         return tracker.plot_training_history()
 
     def predict_movement(self, eeg_data):
-        """Predicts imagined movement from EEG data with uncertainty threshold"""
+        """Predicts imagined movement from EEG data with confidence scores for all outcomes"""
         if not self.is_calibrated:
             raise ValueError("System needs to be calibrated first")
 
@@ -605,21 +605,35 @@ class BCISystem:
         with torch.no_grad():
             input_tensor = torch.DoubleTensor(eeg_data).unsqueeze(0).to(self.device)
             output = self.model(input_tensor)
-            val = output.item()
             
-            # Calculate raw confidence (0 to 1)
-            raw_confidence = abs(val - 0.5) * 2
-            confidence = min(1.0, raw_confidence)
+            # Get raw logit and convert to probability with sigmoid
+            logit = output.item()
+            prob = torch.sigmoid(torch.tensor(logit)).item()
             
-            # Define confidence threshold for uncertain predictions
-            UNCERTAINTY_THRESHOLD = 0.3  # Adjust this value to control sensitivity
+            # Calculate confidences for Left and Right
+            left_confidence = (1 - prob)  # Scale to percentage
+            right_confidence = prob  # Scale to percentage
             
-            if confidence < UNCERTAINTY_THRESHOLD:
-                prediction = "Uncertain"
-            else:
-                prediction = "Left" if val < 0.5 else "Right"
+            # Calculate uncertain confidence - higher when both left/right are close to 50%
+            confidence_diff = abs(left_confidence - right_confidence)
+            uncertain_confidence = max(0, 100 - confidence_diff)
             
-            return prediction, confidence
+            # Define minimum confidence threshold for Left/Right predictions (40%)
+            MIN_CONFIDENCE = 40
+            
+            # If the difference between left/right is small, predict uncertain
+            if uncertain_confidence > 40:  # confidence_diff < 60
+                return "Uncertain", uncertain_confidence
+            
+            # Otherwise return the highest confidence prediction if it meets threshold
+            if max(left_confidence, right_confidence) >= MIN_CONFIDENCE:
+                if left_confidence > right_confidence:
+                    return "Left", min(100, left_confidence)  # Cap at 100%
+                else:
+                    return "Right", min(100, right_confidence)  # Cap at 100%
+            
+            # If no prediction meets threshold, return uncertain
+            return "Uncertain", uncertain_confidence
 
 def create_bci_system(model_path="checkpoints/bci_model.pth"):
     """Cria uma nova instância do sistema BCI"""
