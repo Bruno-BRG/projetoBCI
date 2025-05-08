@@ -1,0 +1,6 @@
+2025-05-07 22:47:40,879 - main_window - INFO - Initializing MainWindow
+2025-05-07 22:47:40,905 - bci_system - INFO - Initializing BCI System
+2025-05-07 22:47:40,905 - bci_system - INFO - No GPU found, using CPU
+2025-05-07 22:47:40,911 - bci_system - INFO - Initializing BCI System
+2025-05-07 22:47:40,911 - bci_system - INFO - No GPU found, using CPU
+2025-05-07 22:47:41,106 - main_window - INFO - MainWindow initialization complete
