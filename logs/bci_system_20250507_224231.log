@@ -1,8 +1,0 @@
-2025-05-07 22:42:31,291 - main_window - INFO - Initializing MainWindow
-2025-05-07 22:42:31,313 - bci_system - INFO - Initializing BCI System
-2025-05-07 22:42:31,313 - bci_system - INFO - No GPU found, using CPU
-2025-05-07 22:42:31,320 - bci_system - INFO - Initializing BCI System
-2025-05-07 22:42:31,321 - bci_system - INFO - No GPU found, using CPU
-2025-05-07 22:42:31,496 - main_window - INFO - MainWindow initialization complete
-2025-05-07 22:42:37,677 - bci_system - INFO - Initializing model with EEG channel: 16
-2025-05-07 22:42:45,311 - bci_system - INFO - Initializing model with EEG channel: 16

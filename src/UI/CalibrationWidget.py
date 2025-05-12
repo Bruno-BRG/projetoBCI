@@ -133,8 +133,17 @@ class CalibrationWidget(QWidget):
 
     def train_model(self):
         if self.bci and self.eeg_channel:
+            # Ask user for model name
+            name, ok = QInputDialog.getText(self, "Model Name", "Enter name for calibration model:")
+            if not ok or not name.strip():
+                QMessageBox.warning(self, "Cancelled", "Training cancelled: no model name provided")
+                return
+            # Ensure checkpoints directory exists and set model path
+            os.makedirs('checkpoints', exist_ok=True)
+            model_path = os.path.join('checkpoints', f"{name}.pth")
+            self.bci.model_path = model_path
             try:
                 self.bci.train_calibration(num_epochs=50, batch_size=10, learning_rate=5e-4)
-                QMessageBox.information(self, "Success", "Model training completed successfully")
+                QMessageBox.information(self, "Success", f"Model training completed and saved to {model_path}")
             except Exception as e:
                 QMessageBox.warning(self, "Error", f"Training failed: {str(e)}")

@@ -11,7 +11,7 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QMessageBox,
-    QScrollArea, QCheckBox, QGroupBox
+    QScrollArea, QCheckBox, QGroupBox, QComboBox, QFileDialog
 )
 from PyQt5.QtCore import Qt, QTimer
 
@@ -79,6 +79,21 @@ class StreamingWidget(QWidget):
         control_group.setLayout(control_layout)
         main_layout.addWidget(control_group)
         
+        # Model selection dropdown
+        model_group = QGroupBox("Select Model")
+        model_layout = QHBoxLayout()
+        self.model_combo = QComboBox()
+        os.makedirs('checkpoints', exist_ok=True)
+        models = [f for f in os.listdir('checkpoints') if f.endswith('.pth')]
+        self.model_combo.addItems(models)
+        self.model_combo.currentIndexChanged.connect(self.on_model_change)
+        self.browse_model_btn = QPushButton("Browse Model...")
+        self.browse_model_btn.clicked.connect(self.browse_model)
+        model_layout.addWidget(self.model_combo)
+        model_layout.addWidget(self.browse_model_btn)
+        model_group.setLayout(model_layout)
+        main_layout.insertWidget(2, model_group)  # after controls
+        
         self.setLayout(main_layout)
         
         # LSL inlet and buffer setup
@@ -101,9 +116,9 @@ class StreamingWidget(QWidget):
         
         # BCI system setup
         self.bci = create_bci_system()
-        self.window_size = None
-        self.window_step = None
-        self.sample_since_last = 0
+        # Load initial model selection
+        if models:
+            self.on_model_change(0)
 
     def start_stream(self):
         logging.info("Starting LSL EEG stream")
@@ -117,14 +132,23 @@ class StreamingWidget(QWidget):
             self.figure.set_size_inches(10, max(4, n_ch * 1.5))
             sr = int(info.nominal_srate())
             self.sr = sr  # store sample rate for capture
-            # initialize model for real-time classification
+            # Initialize BCI system with selected model
+            selected = self.model_combo.currentText() if hasattr(self, 'model_combo') else None
+            model_path = os.path.join('checkpoints', selected) if selected else None
+            self.bci = create_bci_system(model_path=model_path)
             self.bci.initialize_model(n_ch)
             if not self.bci.is_calibrated:
-                QMessageBox.warning(self, "Model Warning", \
+                QMessageBox.warning(self, "Model Warning",
                     "Checkpoint incompatible or not loaded. Classification disabled until calibration.")
+            
             # set sliding window of 1s and prediction every 1s
-            self.window_size = int(self.sr * 1.0)
-            self.window_step = int(self.sr * 1.0)
+            # use sliding window of 400 samples and step of 50 samples
+            self.window_size = 400
+            self.window_step = 50
+            # update timer to fire based on sample step at current sample rate
+            self.timer.setInterval(int(self.window_step / self.sr * 1000))
+            
+
             self.sample_since_last = 0
             buf_len = 500  # fixed number of samples to display
             self.buffer = [deque(maxlen=buf_len) for _ in range(n_ch)]
@@ -264,3 +288,22 @@ class StreamingWidget(QWidget):
                     self.pred_label.setText(f"Pred: {pred}")
                     self.conf_label.setText(f"Conf: {conf:.2%}")
                     logging.info(f"Model prediction: {pred} (confidence {conf:.2%}) on window of {self.window_size} samples")
+
+    def on_model_change(self, index):
+        """Handle checkpoint selection"""
+        name = self.model_combo.currentText()
+        if name:
+            path = os.path.join('checkpoints', name)
+            self.bci = create_bci_system(model_path=path)
+            # if already streaming channels known, init model to load state
+            # will load at start_stream
+
+    def browse_model(self):
+        """Allow user to pick a model file from disk"""
+        start_dir = os.getcwd() + os.sep + 'checkpoints'
+        path, _ = QFileDialog.getOpenFileName(self, "Select model file", start_dir, "PyTorch Model (*.pth)")
+        if path:
+            name = os.path.basename(path)
+            if self.model_combo.findText(name) == -1:
+                self.model_combo.addItem(name)
+            self.model_combo.setCurrentText(name)

@@ -3,8 +3,11 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QLabel, QMessageBox, QGroupBox
+    QPushButton, QLabel, QMessageBox, QGroupBox,
+    QInputDialog
 )
+import os
+from datetime import datetime
 
 # Local imports
 from model.MultiSubjectTest import MultiSubjectTest
@@ -90,16 +93,24 @@ class TestWidget(QWidget):
         self.status_label.setText("Preparing datasets...")
         self.progress_label.setText("This may take a few minutes...")
         
+        # Ask for model name
+        name, ok = QInputDialog.getText(self, "Model Name", "Enter name for multi-subject model:", text=datetime.now().strftime("multisubject_%Y%m%d_%H%M%S"))
+        if not ok or not name.strip():
+            self.status_label.setText("Testing cancelled: no model name provided")
+            self.start_test_button.setEnabled(True)
+            return
+        model_filename = f"{name}.pth"
+        os.makedirs('checkpoints', exist_ok=True)
+        model_path = os.path.join('checkpoints', model_filename)
         try:
-            # Initialize test system with more samples for better learning
-            self.test_system = MultiSubjectTest(train_samples=40, test_samples=20)
-            
-            # Run training and evaluation with EXPLICITLY set parameters
-            # Make sure to explicitly specify all parameters rather than relying on defaults
+            # Initialize test system with provided save path
+            self.test_system = MultiSubjectTest(train_samples=40, test_samples=20, model_path=model_path)
+             
+            # Run training and evaluation
             history = self.test_system.train_and_evaluate(
-                num_epochs=100,     # Explicitly set to 100 epochs
-                batch_size=10,      # Smaller batch size for better learning
-                learning_rate=5e-4  # Lower learning rate for stability
+                num_epochs=100,
+                batch_size=10,
+                learning_rate=5e-4
             )
             
             # Update plot with results
@@ -112,12 +123,12 @@ class TestWidget(QWidget):
             self.progress_label.setText(
                 f"Final Results:\n"
                 f"Training Accuracy: {final_train_acc:.2%}\n"
-                f"Validation Accuracy: {final_val_acc:.2%}"
+                f"Validation Accuracy: {final_val_acc:.2%}\n"
+                f"Model saved at: {model_path}"
             )
-            
+         
         except Exception as e:
             self.status_label.setText("Error during testing")
             self.progress_label.setText(str(e))
-        
         finally:
             self.start_test_button.setEnabled(True)

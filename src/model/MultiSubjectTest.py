@@ -15,9 +15,10 @@ from .EEGAugmentation import load_local_eeg_data
 from .ModelTracker import get_device
 
 class MultiSubjectTest:
-    def __init__(self, train_samples=20, test_samples=10):
+    def __init__(self, train_samples=20, test_samples=10, model_path=None):
         self.train_samples = train_samples
         self.test_samples = test_samples
+        self.model_path = model_path  # path to save trained model
         self.device = get_device()  # Use global device
         self.model = None
         self.training_history = {
@@ -214,8 +215,12 @@ class MultiSubjectTest:
                 print(f"  Val Loss: {avg_val_loss:.4f}, Val Acc: {val_acc:.2%}")
             
             print("\nTraining completed successfully!")
+            # Save model if a save path was provided
+            if self.model_path:
+                torch.save(self.model.state_dict(), self.model_path)
+                print(f"Saved multi-subject model to {self.model_path}")
             return self.training_history
-            
+         
         except Exception as e:
             print(f"\nError during training: {str(e)}")
             raise

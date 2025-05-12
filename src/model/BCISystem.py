@@ -60,17 +60,29 @@ class BCISystem:
         self.model = self.model.float()
         self.model = self.model.to(self.device)
         
-        # Try to load checkpoint, but handle incompatible model architectures gracefully
+        # Try to load checkpoint: first attempt raw model state into base_model
         if self.model_path and os.path.exists(self.model_path):
             try:
                 state = torch.load(self.model_path, map_location=self.device)
-                self.model.load_state_dict(state)
-                self.is_calibrated = True
-                print(f"Successfully loaded model from {self.model_path}")
+                # Attempt loading into base model
+                try:
+                    base_model.load_state_dict(state)
+                    print(f"Loaded raw model state into base model from {self.model_path}")
+                    self.is_calibrated = True
+                except Exception:
+                    # If raw state fails, attempt Lightning checkpoint
+                    try:
+                        # wrap and load Lightning checkpoint
+                        lightning_ckpt = state
+                        self.model.load_state_dict(lightning_ckpt, strict=False)
+                        self.is_calibrated = True
+                        print(f"Loaded Lightning checkpoint from {self.model_path}")
+                    except Exception as e:
+                        print(f"Could not load checkpoint: {str(e)}")
+                        print("Starting with a fresh model - requires calibration")
+                        self.is_calibrated = False
             except Exception as e:
-                print(f"Could not load model checkpoint: {str(e)}")
-                print("Starting with a fresh model - requires calibration")
-                # Checkpoint doesn't match model architecture, just continue with new model
+                print(f"Error loading checkpoint file: {str(e)}")
                 self.is_calibrated = False
 
     def add_calibration_sample(self, eeg_data, label):

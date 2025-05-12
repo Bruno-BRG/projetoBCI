@@ -6,8 +6,9 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QInputDialog,
-    QMessageBox, QGroupBox
+    QMessageBox, QGroupBox, QComboBox, QFileDialog
 )
+import os
 
 # Local imports
 from model.BCISystem import create_bci_system
@@ -98,24 +99,28 @@ class RealUseWidget(QWidget):
         self.classify_button.setEnabled(False)
         self.stream_stop_button.setEnabled(False)
         
-        # Check if a calibrated model exists - need to verify the file exists AND is valid
-        self.verify_calibration()
+        # Model selection dropdown
+        model_group = QGroupBox("Select Model")
+        model_layout = QHBoxLayout()
+        self.model_combo = QComboBox()
+        # Populate with .pth files in checkpoints dir
+        os.makedirs('checkpoints', exist_ok=True)
+        models = [f for f in os.listdir('checkpoints') if f.endswith('.pth')]
+        self.model_combo.addItems(models)
+        self.model_combo.currentIndexChanged.connect(self.on_model_change)
+        # add a browse button to select model file
+        self.browse_btn = QPushButton("Browse Model...")
+        self.browse_btn.clicked.connect(self.browse_model)
+        model_layout.addWidget(self.model_combo)
+        model_layout.addWidget(self.browse_btn)
+        model_group.setLayout(model_layout)
+        layout.insertWidget(1, model_group)  # insert after plot_group
         
-    def verify_calibration(self):
-        """Check if a valid calibrated model exists and update UI accordingly"""
-        try:
-            # Try to create a temporary BCI system to verify calibration
-            test_bci = create_bci_system()
-            
-            # If the system reports it's calibrated after loading the model
-            if test_bci.is_calibrated:
-                print("Found valid calibrated model")
-                self.bci = test_bci  # Use this already initialized model
-                self.classify_button.setEnabled(True)
-            else:
-                print("No valid calibrated model found")
-        except Exception as e:
-            print(f"Error verifying calibration: {str(e)}")
+        # Load initial model
+        if models:
+            self.on_model_change(0)
+        else:
+            self.bci = create_bci_system(model_path=None)
 
     def load_data(self):
         subject_id, ok = QInputDialog.getInt(self, "Subject ID", "Enter Subject ID:", 1, 1, 109)
@@ -201,3 +206,38 @@ class RealUseWidget(QWidget):
             self.confidence_label.setText(f"Confidence: {conf:.2%}")
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Classification failed: {str(e)}")
+
+    def on_model_change(self, index):
+        """Handle model selection change"""
+        model_name = self.model_combo.currentText()
+        if model_name:
+            model_path = os.path.join('checkpoints', model_name)
+            # create system with selected checkpoint
+            self.bci = create_bci_system(model_path=model_path)
+            # if data channels already known, initialize model to load weights
+            if hasattr(self, 'eeg_channel') and self.eeg_channel:
+                self.bci.initialize_model(self.eeg_channel)
+                if self.bci.is_calibrated:
+                    QMessageBox.information(self, "Model Loaded", f"Loaded model: {model_name}")
+                    self.classify_button.setEnabled(True)
+                else:
+                    QMessageBox.warning(self, "Load Failed", f"Checkpoint incompatible: {model_name}")
+                    self.classify_button.setEnabled(False)
+            else:
+                QMessageBox.information(self, "Model Selected", f"Model selected: {model_name}\nLoad data to apply it.")
+        else:
+            self.bci = create_bci_system(model_path=None)
+            self.classify_button.setEnabled(False)
+            QMessageBox.information(self, "No Model", "Using default uncalibrated system.")
+    
+    def browse_model(self):
+        """Open file dialog to select a .pth model file"""
+        start_dir = os.path.join(os.getcwd(), 'checkpoints')
+        path, _ = QFileDialog.getOpenFileName(self, "Select model file", start_dir, "PyTorch Model (*.pth)")
+        if path:
+            name = os.path.basename(path)
+            # add to combo if not present
+            if self.model_combo.findText(name) == -1:
+                self.model_combo.addItem(name)
+            # select it
+            self.model_combo.setCurrentText(name)
