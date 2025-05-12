@@ -1,4 +1,4 @@
-# Third-party imports
+# Importações de terceiros
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from PyQt5.QtWidgets import (
@@ -9,21 +9,21 @@ from PyQt5.QtWidgets import (
 import os
 from datetime import datetime
 
-# Local imports
+# Importações locais
 from model.MultiSubjectTest import MultiSubjectTest
 
 class TestWidget(QWidget):
-    """Widget for multi-subject model testing"""
+    """Widget para testes de modelo multi-paciente"""
     def __init__(self, parent=None):
         super().__init__(parent)
         
-        # Main layout with padding
+        # Layout principal com padding
         layout = QVBoxLayout()
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(10)
         
-        # Plot group for training curves
-        plot_group = QGroupBox("Training Metrics")
+        # Grupo de plotagem para curvas de treinamento
+        plot_group = QGroupBox("Métricas de Treinamento")
         plot_layout = QVBoxLayout()
         self.figure = plt.figure(facecolor='white')
         self.canvas = FigureCanvas(self.figure)
@@ -31,20 +31,20 @@ class TestWidget(QWidget):
         plot_group.setLayout(plot_layout)
         layout.addWidget(plot_group)
         
-        # Status group
-        status_group = QGroupBox("Test Status")
+        # Grupo de status
+        status_group = QGroupBox("Status do Teste")
         status_layout = QVBoxLayout()
-        self.status_label = QLabel("Ready to start testing")
+        self.status_label = QLabel("Pronto para iniciar os testes")
         self.progress_label = QLabel("")
         status_layout.addWidget(self.status_label)
         status_layout.addWidget(self.progress_label)
         status_group.setLayout(status_layout)
         layout.addWidget(status_group)
         
-        # Control group
-        control_group = QGroupBox("Test Controls")
+        # Grupo de controle
+        control_group = QGroupBox("Controles de Teste")
         control_layout = QHBoxLayout()
-        self.start_test_button = QPushButton("Start Multi-Subject Test")
+        self.start_test_button = QPushButton("Iniciar Teste Multi-Paciente")
         self.start_test_button.clicked.connect(self.start_test)
         control_layout.addWidget(self.start_test_button)
         control_group.setLayout(control_layout)
@@ -52,35 +52,35 @@ class TestWidget(QWidget):
         
         self.setLayout(layout)
         
-        # Initialize test system
+        # Inicializar sistema de teste
         self.test_system = None
         self.figure.clear()
         self.canvas.draw()
 
     def update_plot(self, history):
-        """Update the plot with new training metrics"""
+        """Atualizar o gráfico com novas métricas de treinamento"""
         self.figure.clear()
         
-        # Create two subplots
+        # Criar dois subplots
         ax1 = self.figure.add_subplot(211)
         ax2 = self.figure.add_subplot(212)
         
-        # Plot losses
+        # Plotar perdas
         epochs = range(1, len(history['train_losses']) + 1)
-        ax1.plot(epochs, history['train_losses'], 'b-', label='Training Loss')
-        ax1.plot(epochs, history['val_losses'], 'r-', label='Validation Loss')
-        ax1.set_title('Training and Validation Loss')
-        ax1.set_xlabel('Epoch')
-        ax1.set_ylabel('Loss')
+        ax1.plot(epochs, history['train_losses'], 'b-', label='Perda de Treinamento')
+        ax1.plot(epochs, history['val_losses'], 'r-', label='Perda de Validação')
+        ax1.set_title('Perda de Treinamento e Validação')
+        ax1.set_xlabel('Época')
+        ax1.set_ylabel('Perda')
         ax1.grid(True)
         ax1.legend()
         
-        # Plot accuracies
-        ax2.plot(epochs, history['train_accs'], 'b-', label='Training Accuracy')
-        ax2.plot(epochs, history['val_accs'], 'r-', label='Validation Accuracy')
-        ax2.set_title('Training and Validation Accuracy')
-        ax2.set_xlabel('Epoch')
-        ax2.set_ylabel('Accuracy')
+        # Plotar acurácias
+        ax2.plot(epochs, history['train_accs'], 'b-', label='Acurácia de Treinamento')
+        ax2.plot(epochs, history['val_accs'], 'r-', label='Acurácia de Validação')
+        ax2.set_title('Acurácia de Treinamento e Validação')
+        ax2.set_xlabel('Época')
+        ax2.set_ylabel('Acurácia')
         ax2.grid(True)
         ax2.legend()
         
@@ -88,47 +88,47 @@ class TestWidget(QWidget):
         self.canvas.draw()
 
     def start_test(self):
-        """Start the multi-subject testing process"""
+        """Iniciar o processo de teste multi-paciente"""
         self.start_test_button.setEnabled(False)
-        self.status_label.setText("Preparing datasets...")
-        self.progress_label.setText("This may take a few minutes...")
+        self.status_label.setText("Preparando conjuntos de dados...")
+        self.progress_label.setText("Isso pode levar alguns minutos...")
         
-        # Ask for model name
-        name, ok = QInputDialog.getText(self, "Model Name", "Enter name for multi-subject model:", text=datetime.now().strftime("multisubject_%Y%m%d_%H%M%S"))
+        # Perguntar pelo nome do modelo
+        name, ok = QInputDialog.getText(self, "Nome do Modelo", "Digite o nome para o modelo multi-paciente:", text=datetime.now().strftime("multipaciente_%Y%m%d_%H%M%S"))
         if not ok or not name.strip():
-            self.status_label.setText("Testing cancelled: no model name provided")
+            self.status_label.setText("Teste cancelado: nenhum nome de modelo fornecido")
             self.start_test_button.setEnabled(True)
             return
         model_filename = f"{name}.pth"
         os.makedirs('checkpoints', exist_ok=True)
         model_path = os.path.join('checkpoints', model_filename)
         try:
-            # Initialize test system with provided save path
+            # Inicializar sistema de teste com o caminho de salvamento fornecido
             self.test_system = MultiSubjectTest(train_samples=40, test_samples=20, model_path=model_path)
              
-            # Run training and evaluation
+            # Executar treinamento e avaliação
             history = self.test_system.train_and_evaluate(
                 num_epochs=100,
                 batch_size=10,
                 learning_rate=5e-4
             )
             
-            # Update plot with results
+            # Atualizar gráfico com os resultados
             self.update_plot(history)
             
-            # Update status
+            # Atualizar status
             final_train_acc = history['train_accs'][-1]
             final_val_acc = history['val_accs'][-1]
-            self.status_label.setText("Testing completed successfully!")
+            self.status_label.setText("Teste concluído com sucesso!")
             self.progress_label.setText(
-                f"Final Results:\n"
-                f"Training Accuracy: {final_train_acc:.2%}\n"
-                f"Validation Accuracy: {final_val_acc:.2%}\n"
-                f"Model saved at: {model_path}"
+                f"Resultados Finais:\n"
+                f"Acurácia de Treinamento: {final_train_acc:.2%}\n"
+                f"Acurácia de Validação: {final_val_acc:.2%}\n"
+                f"Modelo salvo em: {model_path}"
             )
          
         except Exception as e:
-            self.status_label.setText("Error during testing")
+            self.status_label.setText("Erro durante o teste")
             self.progress_label.setText(str(e))
         finally:
             self.start_test_button.setEnabled(True)

@@ -1,11 +1,11 @@
-# Standard library imports
+# Importações da biblioteca padrão
 import os
 import numpy as np
 import logging
 from datetime import datetime
 from collections import deque
 
-# Third-party imports
+# Importações de terceiros
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from PyQt5.QtWidgets import (
@@ -15,23 +15,23 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, QTimer
 
-# Local imports
+# Importações locais
 from model.BCISystem import create_bci_system
 from model.EEGAugmentation import EEGAugmentation
 from pylsl import StreamInlet, resolve_streams
 
 class StreamingWidget(QWidget):
-    """Widget for live LSL streaming and real-time EEG plotting"""
+    """Widget para transmissão LSL ao vivo e plotagem de EEG em tempo real"""
     def __init__(self, parent=None):
         super().__init__(parent)
         
-        # Main layout with padding
+        # Layout principal com padding
         main_layout = QVBoxLayout()
         main_layout.setContentsMargins(10, 10, 10, 10)
         main_layout.setSpacing(10)
         
-        # Plot group
-        plot_group = QGroupBox("EEG Signal Monitor")
+        # Grupo de plotagem
+        plot_group = QGroupBox("Monitor de Sinal EEG")
         plot_layout = QVBoxLayout()
         self.figure = plt.figure(facecolor='white')
         self.canvas = FigureCanvas(self.figure)
@@ -42,8 +42,8 @@ class StreamingWidget(QWidget):
         plot_group.setLayout(plot_layout)
         main_layout.addWidget(plot_group)
         
-        # Status group
-        status_group = QGroupBox("Prediction Status")
+        # Grupo de status
+        status_group = QGroupBox("Status da Predição")
         status_layout = QHBoxLayout()
         self.pred_label = QLabel("Pred: N/A")
         self.conf_label = QLabel("Conf: N/A")
@@ -54,24 +54,24 @@ class StreamingWidget(QWidget):
         status_group.setLayout(status_layout)
         main_layout.addWidget(status_group)
         
-        # Control group
-        control_group = QGroupBox("Stream Controls")
+        # Grupo de controle
+        control_group = QGroupBox("Controles de Transmissão")
         control_layout = QVBoxLayout()
         
-        # Stream controls row
+        # Linha de controles de transmissão
         stream_layout = QHBoxLayout()
-        self.start_btn = QPushButton("Start Streaming")
-        self.stop_btn = QPushButton("Stop Streaming")
+        self.start_btn = QPushButton("Iniciar Transmissão")
+        self.stop_btn = QPushButton("Parar Transmissão")
         self.stop_btn.setEnabled(False)
         stream_layout.addWidget(self.start_btn)
         stream_layout.addWidget(self.stop_btn)
         control_layout.addLayout(stream_layout)
         
-        # Processing controls row
+        # Linha de controles de processamento
         process_layout = QHBoxLayout()
-        self.process_check = QCheckBox("Enable Signal Processing")
+        self.process_check = QCheckBox("Habilitar Processamento de Sinal")
         self.process_check.setStyleSheet("font-size: 12px; padding: 5px;")
-        self.capture_button = QPushButton("Capture 5s Window")
+        self.capture_button = QPushButton("Capturar Janela de 5s")
         process_layout.addWidget(self.process_check)
         process_layout.addWidget(self.capture_button)
         control_layout.addLayout(process_layout)
@@ -79,107 +79,107 @@ class StreamingWidget(QWidget):
         control_group.setLayout(control_layout)
         main_layout.addWidget(control_group)
         
-        # Model selection dropdown
-        model_group = QGroupBox("Select Model")
+        # Dropdown de seleção de modelo
+        model_group = QGroupBox("Selecionar Modelo")
         model_layout = QHBoxLayout()
         self.model_combo = QComboBox()
         os.makedirs('checkpoints', exist_ok=True)
         models = [f for f in os.listdir('checkpoints') if f.endswith('.pth')]
         self.model_combo.addItems(models)
         self.model_combo.currentIndexChanged.connect(self.on_model_change)
-        self.browse_model_btn = QPushButton("Browse Model...")
+        self.browse_model_btn = QPushButton("Procurar Modelo...")
         self.browse_model_btn.clicked.connect(self.browse_model)
         model_layout.addWidget(self.model_combo)
         model_layout.addWidget(self.browse_model_btn)
         model_group.setLayout(model_layout)
-        main_layout.insertWidget(2, model_group)  # after controls
+        main_layout.insertWidget(2, model_group)  # após controles
         
         self.setLayout(main_layout)
         
-        # LSL inlet and buffer setup
+        # Configuração do inlet LSL e buffer
         self.inlet = None
         self.buffer = None
         self.timer = QTimer(self)
         self.timer.setInterval(20)
         
-        # Capture variables
+        # Variáveis de captura
         self.capturing = False
         self.capture_buffer = []
         self.sample_count = 0
         self.capture_needed = 0
         
-        # Connect signals
+        # Conectar sinais
         self.start_btn.clicked.connect(self.start_stream)
         self.stop_btn.clicked.connect(self.stop_stream)
         self.timer.timeout.connect(self.update_plot)
         self.capture_button.clicked.connect(self.start_capture)
         
-        # BCI system setup
+        # Configuração do sistema BCI
         self.bci = create_bci_system()
-        # Load initial model selection
+        # Carregar seleção inicial do modelo
         if models:
             self.on_model_change(0)
 
     def start_stream(self):
-        logging.info("Starting LSL EEG stream")
+        logging.info("Iniciando transmissão LSL EEG")
         streams = resolve_streams(wait_time=1.0)
         eeg_streams = [s for s in streams if s.type() == 'EEG']
         if eeg_streams:
             self.inlet = StreamInlet(eeg_streams[0])
             info = self.inlet.info()
             n_ch = info.channel_count()
-            # adjust figure size for channel count (height inches per channel)
+            # ajustar tamanho da figura para contagem de canais (altura em polegadas por canal)
             self.figure.set_size_inches(10, max(4, n_ch * 1.5))
             sr = int(info.nominal_srate())
-            self.sr = sr  # store sample rate for capture
-            # Initialize BCI system with selected model
+            self.sr = sr  # armazenar taxa de amostragem para captura
+            # Inicializar sistema BCI com modelo selecionado
             selected = self.model_combo.currentText() if hasattr(self, 'model_combo') else None
             model_path = os.path.join('checkpoints', selected) if selected else None
             self.bci = create_bci_system(model_path=model_path)
             self.bci.initialize_model(n_ch)
             if not self.bci.is_calibrated:
-                QMessageBox.warning(self, "Model Warning",
-                    "Checkpoint incompatible or not loaded. Classification disabled until calibration.")
+                QMessageBox.warning(self, "Aviso do Modelo",
+                    "Checkpoint incompatível ou não carregado. Classificação desativada até calibração.")
             
-            # set sliding window of 1s and prediction every 1s
-            # use sliding window of 400 samples and step of 50 samples
+            # definir janela deslizante de 1s e predição a cada 1s
+            # usar janela deslizante de 400 amostras e passo de 50 amostras
             self.window_size = 400
             self.window_step = 50
-            # update timer to fire based on sample step at current sample rate
+            # atualizar temporizador para disparar com base no passo de amostra na taxa de amostragem atual
             self.timer.setInterval(int(self.window_step / self.sr * 1000))
             
 
             self.sample_since_last = 0
-            buf_len = 500  # fixed number of samples to display
+            buf_len = 500  # número fixo de amostras para exibir
             self.buffer = [deque(maxlen=buf_len) for _ in range(n_ch)]
-            # Prepare figure for efficient real-time update
+            # Preparar figura para atualização eficiente em tempo real
             self.figure.clear()
             self.axes = []
             self.lines = []
             for idx in range(n_ch):
                 ax = self.figure.add_subplot(n_ch, 1, idx+1)
-                ax.set_ylim(-100, 100)  # static amplitude range
-                ax.set_xlim(0, buf_len)  # fixed sample window on x-axis
+                ax.set_ylim(-100, 100)  # faixa de amplitude estática
+                ax.set_xlim(0, buf_len)  # janela de amostra fixa no eixo x
                 ax.set_ylabel(f"Ch {idx+1}")
                 if idx < n_ch - 1:
                     ax.set_xticklabels([])
                 else:
-                    ax.set_xlabel("Samples")
+                    ax.set_xlabel("Amostras")
                 line, = ax.plot([], [], color='blue')
                 self.lines.append(line)
                 self.axes.append(ax)
             self.figure.tight_layout()
             self.canvas.draw()
-            # ensure canvas is tall enough and enable scrolling
+            # garantir que a tela seja alta o suficiente e habilitar rolagem
             height_px = int(self.figure.get_figheight() * self.figure.get_dpi())
             self.canvas.setMinimumHeight(height_px)
             self.start_btn.setEnabled(False)
             self.stop_btn.setEnabled(True)
             self.timer.start()
-            logging.info(f"Stream started: {n_ch} channels at {self.sr} Hz")
+            logging.info(f"Transmissão iniciada: {n_ch} canais a {self.sr} Hz")
 
     def start_capture(self):
-        """Start capturing next 5 seconds of EEG data"""
+        """Iniciar captura dos próximos 5 segundos de dados EEG"""
         if not self.inlet or not hasattr(self, 'sr'):
             return
         self.capture_buffer = []
@@ -187,7 +187,7 @@ class StreamingWidget(QWidget):
         self.capture_needed = int(self.sr * 5)
         self.capturing = True
         self.capture_button.setEnabled(False)
-        logging.info("Started 5s data capture")
+        logging.info("Captura de dados de 5s iniciada")
 
     def stop_stream(self):
         self.timer.stop()
@@ -195,43 +195,43 @@ class StreamingWidget(QWidget):
         self.buffer = None
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
-        logging.info("Stopped EEG stream")
+        logging.info("Transmissão EEG parada")
 
     def update_plot(self):
         if not self.inlet:
             return
         chunk, _ = self.inlet.pull_chunk(timeout=0.0, max_samples=32)
         if chunk:
-            # append new samples
+            # adicionar novas amostras
             for sample in chunk:
                 for i, val in enumerate(sample):
                     if self.process_check.isChecked():
-                        # Only apply processing if enabled
-                        # You can add your processing here if needed in the future
+                        # Aplicar processamento apenas se habilitado
+                        # Você pode adicionar seu processamento aqui se necessário no futuro
                         pass
                     self.buffer[i].append(val)
                     
-            # update each line object with new buffer data
+            # atualizar cada objeto de linha com novos dados do buffer
             for idx, line in enumerate(self.lines):
                 data = list(self.buffer[idx])
                 line.set_data(range(len(data)), data)
             
-            # Update axes
+            # Atualizar eixos
             max_samples = self.buffer[0].maxlen
             for ax in self.axes:
                 ax.set_xlim(0, max_samples)
                 if not self.process_check.isChecked():
-                    # Keep fixed y-axis for raw data
+                    # Manter eixo y fixo para dados brutos
                     ax.set_ylim(-100, 100)
                 else:
-                    # Allow autoscaling if processing is enabled
+                    # Permitir autoescalonamento se o processamento estiver habilitado
                     ax.relim()
                     ax.autoscale_view(scaley=True)
             
-            # redraw canvas efficiently
+            # redesenhar tela de forma eficiente
             self.canvas.draw_idle()
 
-        # Capture logic: accumulate data for 5 seconds
+        # Lógica de captura: acumular dados por 5 segundos
         if self.capturing and chunk:
             for sample in chunk:
                 self.capture_buffer.append(sample)
@@ -243,65 +243,65 @@ class StreamingWidget(QWidget):
                 os.makedirs('captured_data', exist_ok=True)
                 filename = datetime.now().strftime("captured_data/capture_%Y%m%d_%H%M%S.npy")
                 np.save(filename, data_arr)
-                logging.info(f"Saved captured data to {filename}")
+                logging.info(f"Dados capturados salvos em {filename}")
 
-        # Real-time classification with sliding window
+        # Classificação em tempo real com janela deslizante
         if hasattr(self, 'bci') and self.bci.is_calibrated and self.buffer and self.window_size:
             if len(self.buffer[0]) >= self.window_size:
                 self.sample_since_last += len(chunk)
                 if self.sample_since_last >= self.window_step:
                     self.sample_since_last = 0
-                    # extract last window_size samples
+                    # extrair últimas amostras de window_size
                     window_data = np.array([list(self.buffer[i])[-self.window_size:] for i in range(len(self.buffer))])
-                    # apply data augmentation before inference
+                    # aplicar aumento de dados antes da inferência
                     aug_data = EEGAugmentation.time_shift(window_data)
                     aug_data = EEGAugmentation.add_gaussian_noise(aug_data)
                     aug_data = EEGAugmentation.scale_amplitude(aug_data)
                     
-                    # Save window plot for analysis with matching style
+                    # Salvar plot da janela para análise com estilo correspondente
                     os.makedirs('window_plots', exist_ok=True)
-                    plt.style.use('default')  # Reset style
+                    plt.style.use('default')  # Redefinir estilo
                     fig = plt.figure(figsize=(10, 6))
                     ax = fig.add_subplot(111)
                     
-                    # Plot all channels with alpha for clarity
+                    # Plotar todos os canais com alpha para clareza
                     for ch_idx in range(aug_data.shape[0]):
                         ax.plot(aug_data[ch_idx], alpha=0.5, linewidth=0.5)
                     
-                    # Set title and labels
+                    # Definir título e rótulos
                     pred, conf = self.bci.predict_movement(aug_data)
-                    ax.set_title(f"Real-time Window Classification\nPredicted: {pred} (Confidence: {conf:.2%})")
-                    ax.set_xlabel("Time")
+                    ax.set_title(f"Classificação de Janela em Tempo Real\nPredito: {pred} (Confiança: {conf:.2%})")
+                    ax.set_xlabel("Tempo")
                     ax.set_ylabel("Amplitude")
                     
-                    # Set the background color to match
+                    # Definir a cor de fundo para corresponder
                     ax.set_facecolor('lightgray')
                     fig.patch.set_facecolor('white')
                     
-                    # Save and close
+                    # Salvar e fechar
                     filename = datetime.now().strftime("window_plots/window_%Y%m%d_%H%M%S_%f.png")
                     plt.tight_layout()
                     fig.savefig(filename, dpi=300, bbox_inches='tight')
                     plt.close(fig)
                     
-                    # Update GUI labels
+                    # Atualizar rótulos da GUI
                     self.pred_label.setText(f"Pred: {pred}")
                     self.conf_label.setText(f"Conf: {conf:.2%}")
-                    logging.info(f"Model prediction: {pred} (confidence {conf:.2%}) on window of {self.window_size} samples")
+                    logging.info(f"Predição do modelo: {pred} (confiança {conf:.2%}) na janela de {self.window_size} amostras")
 
     def on_model_change(self, index):
-        """Handle checkpoint selection"""
+        """Lidar com seleção de checkpoint"""
         name = self.model_combo.currentText()
         if name:
             path = os.path.join('checkpoints', name)
             self.bci = create_bci_system(model_path=path)
-            # if already streaming channels known, init model to load state
-            # will load at start_stream
+            # se já estiver transmitindo canais conhecidos, inicializar modelo para carregar estado
+            # será carregado em start_stream
 
     def browse_model(self):
-        """Allow user to pick a model file from disk"""
+        """Permitir que o usuário escolha um arquivo de modelo do disco"""
         start_dir = os.getcwd() + os.sep + 'checkpoints'
-        path, _ = QFileDialog.getOpenFileName(self, "Select model file", start_dir, "PyTorch Model (*.pth)")
+        path, _ = QFileDialog.getOpenFileName(self, "Selecionar arquivo de modelo", start_dir, "Modelo PyTorch (*.pth)")
         if path:
             name = os.path.basename(path)
             if self.model_combo.findText(name) == -1:

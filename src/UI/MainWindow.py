@@ -1,17 +1,18 @@
 import sys
 from pathlib import Path
 
-# Add the src directory to the Python path
+# Adiciona o diretório src ao caminho Python
 src_dir = str(Path(__file__).resolve().parent.parent)
 if src_dir not in sys.path:
     sys.path.insert(0, src_dir)
 
+# Importações de widgets locais
 from UI.CalibrationWidget import CalibrationWidget
 from UI.RealUseWidget import RealUseWidget
 from UI.StreamingWidget import StreamingWidget
 from UI.TestWidget import TestWidget
 
-# PyQt imports
+# Importações PyQt
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QStackedWidget, QInputDialog,
@@ -21,10 +22,10 @@ from PyQt5.QtWidgets import (
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("BCI System for Post-Stroke Rehabilitation")
+        self.setWindowTitle("Sistema BCI para Reabilitação Pós-AVC")
         self.resize(1200, 800)
         
-        # Set window style to be more like Java Swing
+        # Define estilo da janela para ser mais parecido com Java Swing
         self.setStyleSheet("""
             QMainWindow {
                 background-color: #f0f0f0;
@@ -72,14 +73,14 @@ class MainWindow(QMainWindow):
             }
         """)
 
-        # Central widget with stacked layout for modes
+        # Widget central com layout empilhado para modos
         central_widget = QWidget()
         central_widget.setStyleSheet("background-color: #f0f0f0; padding: 10px;")
         self.setCentralWidget(central_widget)
         
         main_layout = QVBoxLayout(central_widget)
         
-        # Add a header panel
+        # Adiciona um painel de cabeçalho
         header = QWidget()
         header.setStyleSheet("""
             QWidget {
@@ -95,11 +96,11 @@ class MainWindow(QMainWindow):
             }
         """)
         header_layout = QHBoxLayout(header)
-        header_label = QLabel("BCI System Control Panel")
+        header_label = QLabel("Painel de Controle do Sistema BCI")
         header_layout.addWidget(header_label)
         main_layout.addWidget(header)
 
-        # Toolbar for mode selection styled like old Java tabs
+        # Barra de ferramentas para seleção de modo estilizada como abas antigas do Java
         tab_bar = QWidget()
         tab_bar.setStyleSheet("""
             QWidget {
@@ -123,11 +124,11 @@ class MainWindow(QMainWindow):
         tab_layout.setSpacing(0)
         tab_layout.setContentsMargins(10, 5, 10, 0)
         
-        # Create tab buttons
-        self.calib_button = QPushButton("Calibration")
-        self.real_button = QPushButton("Real Use")
+        # Cria botões de aba
+        self.calib_button = QPushButton("Calibração")
+        self.real_button = QPushButton("Uso Real")
         self.stream_button = QPushButton("Streaming")
-        self.test_button = QPushButton("Testing")
+        self.test_button = QPushButton("Teste")
         self.calib_button.setCheckable(True)
         self.real_button.setCheckable(True)
         self.stream_button.setCheckable(True)
@@ -141,7 +142,7 @@ class MainWindow(QMainWindow):
         tab_layout.addStretch()
         main_layout.addWidget(tab_bar)
 
-        # Stacked widget for content
+        # Widget empilhado para conteúdo
         self.stacked = QStackedWidget()
         self.stacked.setStyleSheet("""
             QStackedWidget {
@@ -160,7 +161,7 @@ class MainWindow(QMainWindow):
         self.stacked.addWidget(self.test_widget)
         main_layout.addWidget(self.stacked)
 
-        # Connect tab buttons
+        # Conecta botões de aba
         self.calib_button.clicked.connect(lambda: self.switch_mode(0))
         self.real_button.clicked.connect(lambda: self.switch_mode(1))
         self.stream_button.clicked.connect(lambda: self.switch_mode(2))
@@ -168,7 +169,7 @@ class MainWindow(QMainWindow):
 
     def switch_mode(self, index: int):
         self.stacked.setCurrentIndex(index)
-        # Update tab button states
+        # Atualiza estados dos botões de aba
         self.calib_button.setChecked(index == 0)
         self.real_button.setChecked(index == 1)
         self.stream_button.setChecked(index == 2)
@@ -178,7 +179,7 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setStyle(QStyleFactory.create('Fusion'))
     
-    # Remove dark palette settings and use classic light theme
+    # Remove configurações de paleta escura e usa tema clássico claro
     win = MainWindow()
     win.show()
     sys.exit(app.exec_())

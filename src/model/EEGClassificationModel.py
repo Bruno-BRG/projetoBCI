@@ -4,39 +4,39 @@ import torch.nn.functional as F
 
 class EEGClassificationModel(nn.Module):
     """
-    Optimized EEGNet architecture implementation based on:
+    Implementação otimizada da arquitetura EEGNet baseada em:
     "EEGNet: A Compact Convolutional Neural Network for EEG-based Brain-Computer Interfaces"
     """
     def __init__(self, eeg_channel, dropout=0.25, temporal_filters=8, depth_multiplier=2, input_length=125):
         super().__init__()
         
-        # Parameters
-        self.F1 = temporal_filters       # number of temporal filters (8 in paper)
-        self.D = depth_multiplier        # depth multiplier (2 in paper)
-        self.F2 = self.D * self.F1       # number of pointwise filters = F1 * D (16 in paper)
-        self.eeg_channel = eeg_channel   # Store channel count for shape calculations
-        self.input_length = input_length # Time dimension
+        # Parâmetros
+        self.F1 = temporal_filters       # número de filtros temporais (8 no artigo)
+        self.D = depth_multiplier        # multiplicador de profundidade (2 no artigo)
+        self.F2 = self.D * self.F1       # número de filtros pontuais = F1 * D (16 no artigo)
+        self.eeg_channel = eeg_channel   # Armazena contagem de canais para cálculos de forma
+        self.input_length = input_length # Dimensão temporal
         
-        # Block 1: Temporal Filtering + Max Norm Constraint + Dropout
+        # Bloco 1: Filtragem Temporal + Restrição de Norma Máxima + Dropout
         self.block1 = nn.Sequential(
-            nn.Conv2d(1, self.F1, (1, 64), padding=(0, 32), bias=False),  # Temporal convolution
+            nn.Conv2d(1, self.F1, (1, 64), padding=(0, 32), bias=False),  # Convolução temporal
             nn.BatchNorm2d(self.F1),
-            # Depthwise convolution with channel multiplier D
+            # Convolução depthwise com multiplicador de canal D
             nn.Conv2d(self.F1, self.D * self.F1, (eeg_channel, 1), groups=self.F1, bias=False),  
             nn.BatchNorm2d(self.D * self.F1),
-            nn.ELU(inplace=True),  # inplace=True saves memory
-            nn.AvgPool2d((1, 4)),  # Average pooling to reduce time dimension
+            nn.ELU(inplace=True),  # inplace=True economiza memória
+            nn.AvgPool2d((1, 4)),  # Pooling médio para reduzir a dimensão temporal
             nn.Dropout(dropout)
         )
         
-        # Block 2: Separable Convolution + Average Pooling + Dropout
+        # Bloco 2: Convolução separável + Pooling médio + Dropout
         self.block2 = nn.Sequential(
-            # Separable convolution: Depthwise + Pointwise
+            # Convolução separável: Depthwise + Pointwise
             nn.Conv2d(self.D * self.F1, self.D * self.F1, (1, 16), padding=(0, 8), groups=self.D * self.F1, bias=False),  # Depthwise
             nn.Conv2d(self.D * self.F1, self.F2, (1, 1), bias=False),  # Pointwise
             nn.BatchNorm2d(self.F2),
-            nn.ELU(inplace=True),  # inplace=True saves memory
-            nn.AvgPool2d((1, 8)),  # Average pooling for further dimensionality reduction
+            nn.ELU(inplace=True),  # inplace=True economiza memória
+            nn.AvgPool2d((1, 8)),  # Pooling médio para redução adicional de dimensionalidade
             nn.Dropout(dropout)
         )
         

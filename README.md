@@ -1,58 +1,82 @@
-# ✨  OpenBCI-CSV ↔ EDF interoperability tasks  ✨
-````text
-## 1. Training pipeline – restrict to 16 OpenBCI channels
-- Inside ML1.py (or the data-loader you call):
-  1. Define `wanted = ['C3','C4','Fp1','Fp2','F7','F3','F4','F8',
-                       'T7','T8','P7','P3','P4','P8','O1','O2']`.
-  2. After `X, y, ch = load_local_eeg_data(...)`:
-     ```python
-     pick = [ch.index(c) for c in wanted]
-     X    = X[:, pick, :]
-     ch   = wanted            # keep for downstream code
-     ```
-  3. Ensure the model’s first convolution expects 16 channels.
+# 🧠 Sistema de Interface Cérebro-Computador (BCI) para Reabilitação Pós-AVC
 
-## 2. Convert OpenBCI CSV ➜ mne.Raw (reuse EDF pipeline)
+Este projeto implementa um sistema BCI completo para auxiliar na reabilitação de pacientes pós-AVC, utilizando sinais EEG do OpenBCI.
+
+## ✨ Características Principais
+
+- Interface gráfica PyQt5 para visualização e controle em tempo real
+- Suporte para 16 canais EEG específicos do OpenBCI
+- Pipeline de treinamento otimizado com PyTorch Lightning
+- Interoperabilidade entre formatos CSV do OpenBCI e EDF
+- Sistema de calibração personalizada por paciente
+- Visualização em tempo real dos sinais EEG
+- Classificação de movimento imaginado (esquerda/direita)
+
+## 🔧 Configuração dos Canais EEG
+
+O sistema utiliza os seguintes 16 canais EEG:
 ```python
-import pandas as pd, mne, numpy as np
-
-def raw_from_openbci(csv_path, ch_names, sfreq=125.):
-    df   = pd.read_csv(csv_path, comment='%')          # skip header lines
-    data = df[ch_names].to_numpy().T * 1e-6           # µV ➜ volts
-    info = mne.create_info(ch_names, sfreq, ch_types='eeg')
-    return mne.io.RawArray(data, info)
-```
-- Add unit test: CSV → Raw → numpy round-trip, verify shape `16×N` and scale.
-
-## 3. Copy annotations from EDF into Raw CSV
-```python
-raw_edf  = mne.io.read_raw_edf('S001R04.edf', preload=False)
-events, _ = mne.events_from_annotations(raw_edf)
-raw_csv  = raw_from_openbci('S001R04_csv_openbci.csv', wanted, sfreq=125)
-ann      = mne.Annotations(
-    onset=events[:,0]/raw_csv.info['sfreq'],
-    duration=np.zeros(len(events)),
-    description=events[:,2].astype(str)
-)
-raw_csv.set_annotations(ann)
-```
-- Wrap above into `transfer_annotations(edf_path, raw_csv)`.
-
-## 4. Live recordings lacking an EDF twin
-- During Cyton recording, stream LSL markers (or TTL).
-- Merge marker stream in MNE (`mne.events_from_annotations`).
-
-## 5. OPTIONAL – add TRIGGER column on EDF➜CSV export
-```python
-trig = np.zeros(raw.n_times, int)
-for onset, dur, code in raw.events:
-    trig[onset:onset+int(dur*raw.info['sfreq'])] = code
-df['TRIGGER'] = trig
+canais = ['C3','C4','Fp1','Fp2','F7','F3','F4','F8',
+          'T7','T8','P7','P3','P4','P8','O1','O2']
 ```
 
-## 6. Update docs
-- Document that training uses **exactly** these 16 channels (units=µV).
-- Reference `raw_from_openbci()` and annotation-transfer utilities.
+## 📊 Estrutura do Projeto
+
+```
+src/
+├── model/              # Implementações dos modelos e processamento
+│   ├── BCISystem.py    # Sistema BCI principal
+│   ├── EEGAugmentation.py # Aumentação de dados EEG
+│   └── ...
+└── UI/                 # Interface gráfica
+    ├── MainWindow.py   # Janela principal
+    ├── CalibrationWidget.py # Widget de calibração
+    └── ...
+```
+
+## 🚀 Como Usar
+
+1. **Calibração**
+   - Colete dados de calibração do paciente
+   - Treine o modelo personalizado
+   - Salve o modelo calibrado
+
+2. **Uso em Tempo Real**
+   - Carregue um modelo treinado
+   - Conecte o dispositivo OpenBCI
+   - Inicie a classificação em tempo real
+
+3. **Testes Multi-Paciente**
+   - Execute testes em múltiplos conjuntos de dados
+   - Visualize métricas de desempenho
+   - Compare resultados entre pacientes
+
+## 📝 Notas Técnicas
+
+### Interoperabilidade OpenBCI-CSV ↔ EDF
+
+O sistema suporta:
+- Conversão de CSV do OpenBCI para formato MNE Raw
+- Transferência de anotações entre EDF e CSV
+- Marcadores LSL para gravações ao vivo
+- Coluna de TRIGGER opcional para exportação
+
+### Pipeline de Processamento
+
+1. Carregamento de dados brutos do OpenBCI
+2. Pré-processamento e filtragem
+3. Extração de características
+4. Classificação usando redes neurais
+5. Feedback em tempo real
+
+## 🛠 Requisitos
+
+- Python 3.x
+- PyTorch
+- PyQt5
+- MNE-Python
+- OpenBCI Python SDK
+- pylsl (Lab Streaming Layer)
 ````
 
 # projetoBCI

@@ -1,9 +1,9 @@
-# Standard library imports
+# Importações da biblioteca padrão
 import os
 import logging
 from datetime import datetime
 
-# Third-party imports
+# Importações de terceiros
 import torch
 import numpy as np
 import torch.nn.functional as F
@@ -12,12 +12,12 @@ from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
 
-# Local imports
+# Importações locais
 from .EEGClassificationModel import EEGClassificationModel
 from .LightningEEGModel import LightningEEGModel
 
 def get_device():
-    """Helper function to get the best available device"""
+    """Função auxiliar para obter o melhor dispositivo disponível"""
     if torch.cuda.is_available():
         return torch.device("cuda:0")
     elif torch.backends.mps.is_available():
@@ -26,7 +26,7 @@ def get_device():
 
 class BCISystem:
     def __init__(self, model_path=None):
-        self.device = get_device()  # Use global device
+        self.device = get_device()  # Usa dispositivo global
         self.model = None
         self.eeg_channel = None
         self.calibration_data = {'X': [], 'y': []}
@@ -34,55 +34,55 @@ class BCISystem:
         self.model_path = model_path
 
     def _get_best_device(self):
-        return get_device()  # Use global device function
+        return get_device()  # Usa função global de dispositivo
 
     def initialize_model(self, eeg_channel):
-        # Accept either channel count or list of channel names
+        # Aceita tanto a contagem de canais quanto a lista de nomes de canais
         if isinstance(eeg_channel, (list, tuple)):
             ch_count = len(eeg_channel)
         else:
             ch_count = eeg_channel
         self.eeg_channel = ch_count
         
-        # Create base model
+        # Cria o modelo base
         base_model = EEGClassificationModel(eeg_channel=ch_count, dropout=0.125)
         
-        # Create a dummy input to initialize the classifier
-        # This ensures the classifier exists before loading the state dict
+        # Cria uma entrada fictícia para inicializar o classificador
+        # Isso garante que o classificador exista antes de carregar o state dict
         with torch.no_grad():
             dummy_input = torch.zeros((1, ch_count, 125), dtype=torch.float32)
-            _ = base_model(dummy_input)  # This will initialize the classifier
+            _ = base_model(dummy_input)  # Isso inicializará o classificador
         
-        # Wrap with Lightning module
+        # Envolve com o módulo Lightning
         self.model = LightningEEGModel(base_model, learning_rate=5e-4)
         
-        # Ensure consistent dtype throughout model - use float32 for better compatibility
+        # Garante consistência de dtype em todo o modelo - usa float32 para melhor compatibilidade
         self.model = self.model.float()
         self.model = self.model.to(self.device)
         
-        # Try to load checkpoint: first attempt raw model state into base_model
+        # Tenta carregar o checkpoint: primeiro tenta o estado bruto do modelo no base_model
         if self.model_path and os.path.exists(self.model_path):
             try:
                 state = torch.load(self.model_path, map_location=self.device)
-                # Attempt loading into base model
+                # Tenta carregar no modelo base
                 try:
                     base_model.load_state_dict(state)
-                    print(f"Loaded raw model state into base model from {self.model_path}")
+                    print(f"Carregado estado bruto do modelo no modelo base de {self.model_path}")
                     self.is_calibrated = True
                 except Exception:
-                    # If raw state fails, attempt Lightning checkpoint
+                    # Se o estado bruto falhar, tenta o checkpoint do Lightning
                     try:
-                        # wrap and load Lightning checkpoint
+                        # Envolve e carrega o checkpoint do Lightning
                         lightning_ckpt = state
                         self.model.load_state_dict(lightning_ckpt, strict=False)
                         self.is_calibrated = True
-                        print(f"Loaded Lightning checkpoint from {self.model_path}")
+                        print(f"Carregado checkpoint do Lightning de {self.model_path}")
                     except Exception as e:
-                        print(f"Could not load checkpoint: {str(e)}")
-                        print("Starting with a fresh model - requires calibration")
+                        print(f"Não foi possível carregar o checkpoint: {str(e)}")
+                        print("Iniciando com um modelo novo - requer calibração")
                         self.is_calibrated = False
             except Exception as e:
-                print(f"Error loading checkpoint file: {str(e)}")
+                print(f"Erro ao carregar o arquivo de checkpoint: {str(e)}")
                 self.is_calibrated = False
 
     def add_calibration_sample(self, eeg_data, label):
@@ -91,14 +91,14 @@ class BCISystem:
         self.calibration_data['y'].append(label)
 
     def train_calibration(self, num_epochs=100, batch_size=10, learning_rate=5e-4):
-        """Trains the model with the calibration data using Lightning"""
+        """Treina o modelo com os dados de calibração usando Lightning"""
         if len(self.calibration_data['X']) < 2:
-            raise ValueError("Need at least 2 calibration samples")
+            raise ValueError("É necessário pelo menos 2 amostras de calibração")
 
         X = np.array(self.calibration_data['X'])
         y = np.array(self.calibration_data['y'])
         
-        # Create datasets
+        # Cria datasets
         train_size = int(0.8 * len(X))
         indices = torch.randperm(len(X))
         train_indices = indices[:train_size]
@@ -107,17 +107,17 @@ class BCISystem:
         X_train, y_train = X[train_indices], y[train_indices]
         X_val, y_val = X[val_indices], y[val_indices]
         
-        # Use float32 tensors to match model dtype
+        # Usa tensores float32 para corresponder ao dtype do modelo
         train_dataset = TensorDataset(torch.tensor(X_train, dtype=torch.float32), 
                                      torch.tensor(y_train, dtype=torch.float32))
         val_dataset = TensorDataset(torch.tensor(X_val, dtype=torch.float32),
                                    torch.tensor(y_val, dtype=torch.float32))
         
-        # Create data loaders with workers for better performance
+        # Cria data loaders com workers para melhor desempenho
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0)
         val_loader = DataLoader(val_dataset, batch_size=batch_size, num_workers=0)
 
-        # Configure training
+        # Configura o treinamento
         logger = TensorBoardLogger("lightning_logs", name="bci_model")
         early_stopping = EarlyStopping(
             monitor="val_loss",
@@ -133,7 +133,7 @@ class BCISystem:
             mode="min"
         )
 
-        # Initialize trainer
+        # Inicializa o treinador
         trainer = Trainer(
             max_epochs=num_epochs,
             accelerator="auto",
@@ -143,21 +143,21 @@ class BCISystem:
             log_every_n_steps=1
         )
 
-        # Store the initial model class and parameters for reloading
+        # Armazena a classe e os parâmetros iniciais do modelo para recarregar
         model_class = self.model.__class__
         model_params = {
             "model": self.model.model,
             "learning_rate": learning_rate
         }
 
-        # Train the model
+        # Treina o modelo
         trainer.fit(
             self.model,
             train_dataloaders=train_loader,
             val_dataloaders=val_loader
         )
 
-        # Load best model - fixed to use classmethod on the class, not instance
+        # Carrega o melhor modelo - corrigido para usar o método de classe na classe, não na instância
         self.model = model_class.load_from_checkpoint(
             checkpoint_callback.best_model_path,
             **model_params
@@ -169,54 +169,54 @@ class BCISystem:
         self.is_calibrated = True
 
     def predict_movement(self, eeg_data):
-        """Predicts imagined movement from EEG data with balanced confidence scoring"""
+        """Prevê movimento imaginado a partir dos dados de EEG com pontuação de confiança balanceada"""
         if not self.is_calibrated:
-            raise ValueError("System needs to be calibrated first")
+            raise ValueError("O sistema precisa ser calibrado primeiro")
 
         self.model.eval()
         with torch.no_grad():
-            # Convert the input to the same dtype as the model
+            # Converte a entrada para o mesmo dtype do modelo
             input_tensor = torch.tensor(eeg_data, dtype=torch.float32).unsqueeze(0).to(self.device)
             
-            # Make sure we have the expected time dimension
+            # Certifica-se de que temos a dimensão de tempo esperada
             if input_tensor.shape[2] != 125:
                 if input_tensor.shape[2] > 125:
-                    input_tensor = input_tensor[:, :, :125]  # Truncate
+                    input_tensor = input_tensor[:, :, :125]  # Trunca
                 else:
                     pad_size = 125 - input_tensor.shape[2]
-                    input_tensor = F.pad(input_tensor, (0, pad_size), "constant", 0)  # Pad
+                    input_tensor = F.pad(input_tensor, (0, pad_size), "constant", 0)  # Preenche
             
             output = self.model(input_tensor)
             
-            # Get raw logit and convert to probability with sigmoid
+            # Obtém o logit bruto e converte para probabilidade com sigmoid
             logit = output.item()
             prob = torch.sigmoid(torch.tensor(logit)).item()
             
-            # Calculate confidences for Left and Right
-            left_confidence = 1 - prob  # Probability of Left
-            right_confidence = prob     # Probability of Right
+            # Calcula as confianças para Esquerda e Direita
+            left_confidence = 1 - prob  # Probabilidade de Esquerda
+            right_confidence = prob     # Probabilidade de Direita
             
-            # Debug output to check prediction distribution
-            print(f"DEBUG: Raw probability: {prob:.4f}, Left: {left_confidence:.4f}, Right: {right_confidence:.4f}")
+            # Saída de depuração para verificar a distribuição da previsão
+            print(f"DEBUG: Probabilidade bruta: {prob:.4f}, Esquerda: {left_confidence:.4f}, Direita: {right_confidence:.4f}")
             
-            # Define decision boundaries
-            LEFT_THRESHOLD = 0.40       # If prob < 0.40, predict Left
-            RIGHT_THRESHOLD = 0.60      # If prob > 0.60, predict Right
+            # Define os limites de decisão
+            LEFT_THRESHOLD = 0.40       # Se prob < 0.40, prevê Esquerda
+            RIGHT_THRESHOLD = 0.60      # Se prob > 0.60, prevê Direita
             
-            # Make prediction based on raw probability
+            # Faz a previsão com base na probabilidade bruta
             if prob < LEFT_THRESHOLD:
-                # Left prediction - directly use the left confidence from model
-                # Convert to percentage for display
+                # Previsão de Esquerda - usa diretamente a confiança de esquerda do modelo
+                # Converte para porcentagem para exibição
                 return "Left", left_confidence
             elif prob > RIGHT_THRESHOLD:
-                # Right prediction - directly use the right confidence from model
-                # Convert to percentage for display
+                # Previsão de Direita - usa diretamente a confiança de direita do modelo
+                # Converte para porcentagem para exibição
                 return "Right", right_confidence
             else:
-                # Uncertain prediction - calculate uncertainty confidence
-                # Higher when closer to 0.5 (maximum uncertainty)
+                # Previsão incerta - calcula a confiança de incerteza
+                # Maior quando mais próximo de 0.5 (máxima incerteza)
                 distance_from_center = abs(prob - 0.5)
-                uncertain_confidence = 1.0 - (distance_from_center * 2)  # Scales from 0-1
+                uncertain_confidence = 1.0 - (distance_from_center * 2)  # Escala de 0-1
                 return "Uncertain", uncertain_confidence
 
 def create_bci_system(model_path="checkpoints/bci_model.pth"):
