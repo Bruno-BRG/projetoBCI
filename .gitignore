@@ -1,0 +1,27 @@
+# Python cache files and directories
+__pycache__/
+*.py[cod]
+*$py.class
+
+# PyCharm
+.idea/
+
+# VS Code
+.vscode/
+
+# Python virtual environment
+venv/
+env/
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Lightning logs
+lightning_logs/
+training_runs/
+
+# Data files
+captured_data/
+window_plots/

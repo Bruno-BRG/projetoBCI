@@ -9,10 +9,12 @@ from PyQt5.QtWidgets import (
     QPushButton, QLabel, QInputDialog,
     QMessageBox, QGroupBox
 )
+import numpy as np
 
 # Importações locais
 from model.BCISystem import create_bci_system
-from model.EEGAugmentation import load_local_eeg_data
+from model.EEGDataLoader import load_local_eeg_data
+from model.EEGFilter import EEGFilter
 
 class CalibrationWidget(QWidget):
     def __init__(self, parent=None):
@@ -66,6 +68,7 @@ class CalibrationWidget(QWidget):
         self.idx = 0
         self.eeg_channel = None
         self.bci = create_bci_system()
+        self.filter = EEGFilter()  # always use the bandpass filter
         
         # Conectar sinais
         self.load_button.clicked.connect(self.load_data)
@@ -85,7 +88,9 @@ class CalibrationWidget(QWidget):
         if not ok:
             return
         X, y, ch = load_local_eeg_data(subject_id, augment=False)  # Alterado para sem aumento
-        self.data, self.labels, self.eeg_channel = X, y, ch
+        # apply offline filter to all epochs
+        filtered_X = np.array([self.filter.filter_offline(epoch) for epoch in X])
+        self.data, self.labels, self.eeg_channel = filtered_X, y, ch
         self.idx = 0
         
         # Inicializar modelo BCI com contagem de canais
@@ -104,8 +109,9 @@ class CalibrationWidget(QWidget):
         self.figure.clear()
         ax = self.figure.add_subplot(111)
         sample = self.data[self.idx]
-        for ch in range(sample.shape[0]):
-            ax.plot(sample[ch], alpha=0.5, linewidth=0.5)
+        # plot each channel of already filtered sample
+        for ch_data in sample:
+            ax.plot(ch_data, alpha=0.5, linewidth=0.5)
         ax.set_title(f"Amostra {self.idx+1}/{len(self.data)} - Rótulo: {'Esquerda' if self.labels[self.idx]==0 else 'Direita'}")
         ax.set_xlabel("Tempo")
         ax.set_ylabel("Amplitude")

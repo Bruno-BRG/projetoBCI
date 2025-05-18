@@ -9,10 +9,12 @@ from PyQt5.QtWidgets import (
     QMessageBox, QGroupBox, QComboBox, QFileDialog
 )
 import os
+import numpy as np
 
 # Local imports
 from model.BCISystem import create_bci_system
-from model.EEGAugmentation import load_local_eeg_data
+from model.EEGDataLoader import load_local_eeg_data
+from model.EEGFilter import EEGFilter
 from pylsl import StreamInlet, resolve_streams
 
 
@@ -82,6 +84,7 @@ class RealUseWidget(QWidget):
         self.idx = 0
         self.eeg_channel = None
         self.bci = create_bci_system()
+        self.filter = EEGFilter()  # always use the bandpass filter
         
         # Connect signals
         self.load_button.clicked.connect(self.load_data)
@@ -128,6 +131,7 @@ class RealUseWidget(QWidget):
             return
         X, y, ch = load_local_eeg_data(subject_id, augment=False)  # Changed to no augmentation
         self.data, self.labels, self.eeg_channel = X, y, ch
+        self.filter = EEGFilter()  # reinitialize for loaded offline data
         self.idx = 0
         
         # Only initialize model if we don't already have a calibrated one
@@ -153,8 +157,11 @@ class RealUseWidget(QWidget):
         self.figure.clear()
         ax = self.figure.add_subplot(111)
         sample = self.data[self.idx]
-        for ch in range(sample.shape[0]):
-            ax.plot(sample[ch], alpha=0.5, linewidth=0.5)
+        # Apply offline filter to the current sample
+        filtered = self.filter.filter_offline(sample)
+        # Plot each channel of filtered data
+        for ch_data in filtered:
+            ax.plot(ch_data, alpha=0.5, linewidth=0.5)
         ax.set_title(f"Sample {self.idx+1}/{len(self.data)} - Label: {'Left' if self.labels[self.idx]==0 else 'Right'}")
         ax.set_xlabel("Time")
         ax.set_ylabel("Amplitude")
@@ -175,9 +182,12 @@ class RealUseWidget(QWidget):
 
     def start_stream(self):
         """Handle start of LSL stream"""
+        # Initialize streaming filter
+        self.filter = EEGFilter(sfreq=self.eeg_channel or 250.0)
         streams = resolve_streams(wait_time=1.0)
         eeg_streams = [s for s in streams if s.type() == 'EEG']
         if eeg_streams:
+            # Pre-filter streaming data in update_plot loop
             # Enable stop button and disable start button
             self.stream_start_button.setEnabled(False)
             self.stream_stop_button.setEnabled(True)
@@ -200,7 +210,10 @@ class RealUseWidget(QWidget):
             return
             
         try:
-            pred, conf = self.bci.predict_movement(self.data[self.idx])
+            # filter the sample before classification
+            sample = self.data[self.idx]
+            filtered_sample = self.filter.filter_offline(sample)
+            pred, conf = self.bci.predict_movement(filtered_sample)
             self.true_label_label.setText(f"True: {'Left' if self.labels[self.idx]==0 else 'Right'}")
             self.pred_label_label.setText(f"Predicted: {pred}")
             self.confidence_label.setText(f"Confidence: {conf:.2%}")

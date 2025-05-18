@@ -1,6 +1,7 @@
 # Importações da biblioteca padrão
 import os
 import numpy as np
+from model.EEGFilter import EEGFilter
 import logging
 from datetime import datetime
 from collections import deque
@@ -17,7 +18,6 @@ from PyQt5.QtCore import Qt, QTimer
 
 # Importações locais
 from model.BCISystem import create_bci_system
-from model.EEGAugmentation import EEGAugmentation
 from pylsl import StreamInlet, resolve_streams
 
 class StreamingWidget(QWidget):
@@ -116,6 +116,7 @@ class StreamingWidget(QWidget):
         
         # Configuração do sistema BCI
         self.bci = create_bci_system()
+        self.filter = None  # will hold EEGFilter for streaming
         # Carregar seleção inicial do modelo
         if models:
             self.on_model_change(0)
@@ -132,6 +133,8 @@ class StreamingWidget(QWidget):
             self.figure.set_size_inches(10, max(4, n_ch * 1.5))
             sr = int(info.nominal_srate())
             self.sr = sr  # armazenar taxa de amostragem para captura
+            # Initialize streaming filter with correct sampling rate
+            self.filter = EEGFilter(sfreq=self.sr)
             # Inicializar sistema BCI com modelo selecionado
             selected = self.model_combo.currentText() if hasattr(self, 'model_combo') else None
             model_path = os.path.join('checkpoints', selected) if selected else None
@@ -202,15 +205,13 @@ class StreamingWidget(QWidget):
             return
         chunk, _ = self.inlet.pull_chunk(timeout=0.0, max_samples=32)
         if chunk:
-            # adicionar novas amostras
-            for sample in chunk:
-                for i, val in enumerate(sample):
-                    if self.process_check.isChecked():
-                        # Aplicar processamento apenas se habilitado
-                        # Você pode adicionar seu processamento aqui se necessário no futuro
-                        pass
-                    self.buffer[i].append(val)
-                    
+            # Always filter incoming chunk and append to buffers
+            arr = np.array(chunk).T  # shape (n_channels, n_samples)
+            filtered_chunk = self.filter.filter_stream(arr)
+            for ch_idx, channel_samples in enumerate(filtered_chunk):
+                for sample_val in channel_samples:
+                    self.buffer[ch_idx].append(sample_val)
+            
             # atualizar cada objeto de linha com novos dados do buffer
             for idx, line in enumerate(self.lines):
                 data = list(self.buffer[idx])
@@ -250,39 +251,11 @@ class StreamingWidget(QWidget):
             if len(self.buffer[0]) >= self.window_size:
                 self.sample_since_last += len(chunk)
                 if self.sample_since_last >= self.window_step:
-                    self.sample_since_last = 0
-                    # extrair últimas amostras de window_size
+                    self.sample_since_last = 0                    # extrair últimas amostras de window_size
                     window_data = np.array([list(self.buffer[i])[-self.window_size:] for i in range(len(self.buffer))])
-                    # aplicar aumento de dados antes da inferência
-                    aug_data = EEGAugmentation.time_shift(window_data)
-                    aug_data = EEGAugmentation.add_gaussian_noise(aug_data)
-                    aug_data = EEGAugmentation.scale_amplitude(aug_data)
                     
-                    # Salvar plot da janela para análise com estilo correspondente
-                    os.makedirs('window_plots', exist_ok=True)
-                    plt.style.use('default')  # Redefinir estilo
-                    fig = plt.figure(figsize=(10, 6))
-                    ax = fig.add_subplot(111)
-                    
-                    # Plotar todos os canais com alpha para clareza
-                    for ch_idx in range(aug_data.shape[0]):
-                        ax.plot(aug_data[ch_idx], alpha=0.5, linewidth=0.5)
-                    
-                    # Definir título e rótulos
-                    pred, conf = self.bci.predict_movement(aug_data)
-                    ax.set_title(f"Classificação de Janela em Tempo Real\nPredito: {pred} (Confiança: {conf:.2%})")
-                    ax.set_xlabel("Tempo")
-                    ax.set_ylabel("Amplitude")
-                    
-                    # Definir a cor de fundo para corresponder
-                    ax.set_facecolor('lightgray')
-                    fig.patch.set_facecolor('white')
-                    
-                    # Salvar e fechar
-                    filename = datetime.now().strftime("window_plots/window_%Y%m%d_%H%M%S_%f.png")
-                    plt.tight_layout()
-                    fig.savefig(filename, dpi=300, bbox_inches='tight')
-                    plt.close(fig)
+                    # Get prediction
+                    pred, conf = self.bci.predict_movement(window_data)
                     
                     # Atualizar rótulos da GUI
                     self.pred_label.setText(f"Pred: {pred}")

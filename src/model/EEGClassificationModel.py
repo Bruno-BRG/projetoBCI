@@ -1,21 +1,31 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import pytorch_lightning as L
+import torchmetrics
 
-class EEGClassificationModel(nn.Module):
+class EEGClassificationModel(L.LightningModule):
     """
-    Implementação otimizada da arquitetura EEGNet baseada em:
-    "EEGNet: A Compact Convolutional Neural Network for EEG-based Brain-Computer Interfaces"
+    Unified EEGNet model with integrated training capabilities.
+    Based on "EEGNet: A Compact Convolutional Neural Network for EEG-based Brain-Computer Interfaces"
     """
-    def __init__(self, eeg_channel, dropout=0.25, temporal_filters=8, depth_multiplier=2, input_length=125):
+    def __init__(self, eeg_channel, dropout=0.25, temporal_filters=8, depth_multiplier=2, 
+                 input_length=125, learning_rate=5e-4):
         super().__init__()
+        # Store hyperparameters
+        self.save_hyperparameters()
+        self.learning_rate = learning_rate
         
-        # Parâmetros
-        self.F1 = temporal_filters       # número de filtros temporais (8 no artigo)
-        self.D = depth_multiplier        # multiplicador de profundidade (2 no artigo)
-        self.F2 = self.D * self.F1       # número de filtros pontuais = F1 * D (16 no artigo)
-        self.eeg_channel = eeg_channel   # Armazena contagem de canais para cálculos de forma
-        self.input_length = input_length # Dimensão temporal
+        # Model architecture parameters
+        self.F1 = temporal_filters
+        self.D = depth_multiplier
+        self.F2 = self.D * self.F1
+        self.eeg_channel = eeg_channel
+        self.input_length = input_length
+        
+        # Metrics
+        self.train_accuracy = torchmetrics.Accuracy(task='binary')
+        self.val_accuracy = torchmetrics.Accuracy(task='binary')
         
         # Bloco 1: Filtragem Temporal + Restrição de Norma Máxima + Dropout
         self.block1 = nn.Sequential(
@@ -87,26 +97,65 @@ class EEGClassificationModel(nn.Module):
                 nn.init.xavier_normal_(m.weight)
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
-    
-    def forward(self, x):
-        # Input shape: [batch, channels, time]
-        # Need to reshape to [batch, 1, channels, time] for 2D convolution
-        batch_size = x.size(0)
-        x = x.unsqueeze(1)  # Add channel dimension -> [batch, 1, channels, time]
-        
-        # Forward through blocks
-        x = self.block1(x)
-        x = self.block2(x)
-        
-        # Flatten and classify
-        x = x.view(batch_size, -1)
-        x = self.classifier(x)
+    def _normalize_input(self, x):
+        """Ensure input has correct time dimension"""
+        if x.shape[2] != self.input_length:
+            if x.shape[2] > self.input_length:
+                x = x[:, :, :self.input_length]
+            else:
+                pad_size = self.input_length - x.shape[2]
+                x = F.pad(x, (0, pad_size), "constant", 0)
         return x
     
-    def l2_regularization(self):
-        # Apply L2 regularization during training if needed
-        l2_reg = torch.tensor(0., device=next(self.parameters()).device)
-        for name, param in self.named_parameters():
-            if 'weight' in name:
-                l2_reg += torch.norm(param, 2)
-        return l2_reg
+    def forward(self, x):
+        batch_size = x.size(0)
+        x = self._normalize_input(x)
+        x = x.unsqueeze(1)
+        x = self.block1(x)
+        x = self.block2(x)
+        x = x.view(batch_size, -1)
+        return self.classifier(x)
+    
+    def training_step(self, batch, batch_idx):
+        x, y = batch
+        y_hat = self(x)
+        loss = F.binary_cross_entropy_with_logits(y_hat.view(-1), y.float())
+        acc = self.train_accuracy(y_hat.view(-1), y)
+        self.log('train_loss', loss, prog_bar=True)
+        self.log('train_acc', acc, prog_bar=True)
+        return loss
+    
+    def validation_step(self, batch, batch_idx):
+        x, y = batch
+        y_hat = self(x)
+        loss = F.binary_cross_entropy_with_logits(y_hat.view(-1), y.float())
+        acc = self.val_accuracy(y_hat.view(-1), y)
+        self.log('val_loss', loss, prog_bar=True)
+        self.log('val_acc', acc, prog_bar=True)
+        return loss
+    
+    def configure_optimizers(self):
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
+        scheduler = torch.optim.lr_scheduler.MultiStepLR(
+            optimizer,
+            milestones=[
+                int(self.trainer.max_epochs * 0.25),
+                int(self.trainer.max_epochs * 0.5),
+                int(self.trainer.max_epochs * 0.75)
+            ],
+            gamma=0.1
+        )
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "monitor": "val_loss"
+            }
+        }
+        
+    def predict_proba(self, x):
+        """Get probability predictions with sigmoid activation"""
+        self.eval()
+        with torch.no_grad():
+            output = self(x)
+            return torch.sigmoid(output).item()

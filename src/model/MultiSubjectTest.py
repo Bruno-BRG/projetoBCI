@@ -11,7 +11,7 @@ import numpy as np
 
 # Local imports
 from .EEGClassificationModel import EEGClassificationModel
-from .EEGAugmentation import load_local_eeg_data
+from .EEGDataLoader import load_local_eeg_data
 from .ModelTracker import get_device
 
 class MultiSubjectTest:

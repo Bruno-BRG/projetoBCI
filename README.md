@@ -26,7 +26,7 @@ canais = ['C3','C4','Fp1','Fp2','F7','F3','F4','F8',
 src/
 ├── model/              # Implementações dos modelos e processamento
 │   ├── BCISystem.py    # Sistema BCI principal
-│   ├── EEGAugmentation.py # Aumentação de dados EEG
+│   ├── EEGDataLoader.py # Carregamento e filtragem de dados EEG
 │   └── ...
 └── UI/                 # Interface gráfica
     ├── MainWindow.py   # Janela principal
