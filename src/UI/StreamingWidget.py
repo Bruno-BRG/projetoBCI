@@ -33,7 +33,13 @@ class StreamingWidget(QWidget):
         # Grupo de plotagem
         plot_group = QGroupBox("Monitor de Sinal EEG")
         plot_layout = QVBoxLayout()
+        
+        # Configure matplotlib for high performance
+        plt.style.use('fast')  # Use fast style
         self.figure = plt.figure(facecolor='white')
+        self.figure.set_dpi(80)  # Lower DPI for better performance
+        
+        # Use new Qt5 backend
         self.canvas = FigureCanvas(self.figure)
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
@@ -100,7 +106,20 @@ class StreamingWidget(QWidget):
         self.inlet = None
         self.buffer = None
         self.timer = QTimer(self)
-        self.timer.setInterval(20)
+        self.timer.setInterval(16)  # ~60fps update rate
+        
+        # Buffer and plot settings
+        self.buffer_size = 400  # Fixed buffer size of 400 samples
+        self.max_update_rate = 30  # Frame rate limit in Hz
+        self.last_update_time = 0
+        self.background = None
+        self.need_redraw = True
+        self.lines = []
+        self.axes = []
+        
+        # Chunk processing settings
+        self.max_chunk_size = 32
+        self.min_update_interval = 1.0 / self.max_update_rate
         
         # Variáveis de captura
         self.capturing = False
@@ -126,60 +145,76 @@ class StreamingWidget(QWidget):
         streams = resolve_streams(wait_time=1.0)
         eeg_streams = [s for s in streams if s.type() == 'EEG']
         if eeg_streams:
-            self.inlet = StreamInlet(eeg_streams[0])
+            # Initialize LSL inlet with minimal buffering
+            self.inlet = StreamInlet(eeg_streams[0], max_buflen=1, processing_flags=0)
             info = self.inlet.info()
             n_ch = info.channel_count()
-            # ajustar tamanho da figura para contagem de canais (altura em polegadas por canal)
-            self.figure.set_size_inches(10, max(4, n_ch * 1.5))
             sr = int(info.nominal_srate())
-            self.sr = sr  # armazenar taxa de amostragem para captura
-            # Initialize streaming filter with correct sampling rate
+            self.sr = sr
+            
+            # Buffer size is fixed at 400 samples
+            self.buffer_size = 400  # Fixed window size
+            
+            # Setup optimized figure size
+            self.figure.set_size_inches(10, max(4, n_ch * 1.5))
+            
+            # Initialize streaming filter and BCI system
             self.filter = EEGFilter(sfreq=self.sr)
-            # Inicializar sistema BCI com modelo selecionado
             selected = self.model_combo.currentText() if hasattr(self, 'model_combo') else None
             model_path = os.path.join('checkpoints', selected) if selected else None
             self.bci = create_bci_system(model_path=model_path)
             self.bci.initialize_model(n_ch)
-            if not self.bci.is_calibrated:
-                QMessageBox.warning(self, "Aviso do Modelo",
-                    "Checkpoint incompatível ou não carregado. Classificação desativada até calibração.")
             
-            # definir janela deslizante de 1s e predição a cada 1s
-            # usar janela deslizante de 400 amostras e passo de 50 amostras
+            # Configure windows and timing
             self.window_size = 400
             self.window_step = 50
-            # atualizar temporizador para disparar com base no passo de amostra na taxa de amostragem atual
-            self.timer.setInterval(int(self.window_step / self.sr * 1000))
+            update_interval = max(16, int(1000 / self.max_update_rate))
+            self.timer.setInterval(update_interval)
             
-
+            # Initialize optimized buffers with fixed size
             self.sample_since_last = 0
-            buf_len = 500  # número fixo de amostras para exibir
-            self.buffer = [deque(maxlen=buf_len) for _ in range(n_ch)]
-            # Preparar figura para atualização eficiente em tempo real
+            self.buffer = [deque(maxlen=400) for _ in range(n_ch)]  # Fixed size of 400
+            self.buffer_x = np.arange(400)  # Pre-allocate x data for 400 samples
+            
+            # Setup optimized plotting
             self.figure.clear()
             self.axes = []
             self.lines = []
+            
+            # Create subplots with optimized settings
             for idx in range(n_ch):
                 ax = self.figure.add_subplot(n_ch, 1, idx+1)
-                ax.set_ylim(-100, 100)  # faixa de amplitude estática
-                ax.set_xlim(0, buf_len)  # janela de amostra fixa no eixo x
+                ax.set_ylim(-100, 100)
+                ax.set_xlim(0, 400)  # Fixed x-axis range for 400 samples
                 ax.set_ylabel(f"Ch {idx+1}")
+                ax.grid(False)
+                ax.set_facecolor('white')
+                ax.minorticks_off()
                 if idx < n_ch - 1:
                     ax.set_xticklabels([])
                 else:
                     ax.set_xlabel("Amostras")
-                line, = ax.plot([], [], color='blue')
+                
+                # Create animated line with minimal properties
+                line, = ax.plot([], [], 'b-', animated=True, linewidth=1.0)
                 self.lines.append(line)
                 self.axes.append(ax)
+            
+            # Initial draw to setup background
             self.figure.tight_layout()
             self.canvas.draw()
-            # garantir que a tela seja alta o suficiente e habilitar rolagem
+            self.background = self.canvas.copy_from_bbox(self.figure.bbox)
+            
+            # Set canvas height
             height_px = int(self.figure.get_figheight() * self.figure.get_dpi())
             self.canvas.setMinimumHeight(height_px)
+            
+            # Enable UI elements
             self.start_btn.setEnabled(False)
             self.stop_btn.setEnabled(True)
             self.timer.start()
-            logging.info(f"Transmissão iniciada: {n_ch} canais a {self.sr} Hz")
+            
+            logging.info(f"Transmissão iniciada: {n_ch} canais a {self.sr} Hz, buffer fixo de 400 amostras")
 
     def start_capture(self):
         """Iniciar captura dos próximos 5 segundos de dados EEG"""
@@ -203,40 +238,70 @@ class StreamingWidget(QWidget):
     def update_plot(self):
         if not self.inlet:
             return
-        chunk, _ = self.inlet.pull_chunk(timeout=0.0, max_samples=32)
-        if chunk:
-            # Always filter incoming chunk and append to buffers
-            arr = np.array(chunk).T  # shape (n_channels, n_samples)
-            filtered_chunk = self.filter.filter_stream(arr)
-            for ch_idx, channel_samples in enumerate(filtered_chunk):
-                for sample_val in channel_samples:
-                    self.buffer[ch_idx].append(sample_val)
             
-            # atualizar cada objeto de linha com novos dados do buffer
-            for idx, line in enumerate(self.lines):
-                data = list(self.buffer[idx])
-                line.set_data(range(len(data)), data)
+        # Frame rate limiting
+        current_time = datetime.now().timestamp()
+        if current_time - self.last_update_time < self.min_update_interval:
+            return
             
-            # Atualizar eixos
-            max_samples = self.buffer[0].maxlen
-            for ax in self.axes:
-                ax.set_xlim(0, max_samples)
-                if not self.process_check.isChecked():
-                    # Manter eixo y fixo para dados brutos
-                    ax.set_ylim(-100, 100)
-                else:
-                    # Permitir autoescalonamento se o processamento estiver habilitado
-                    ax.relim()
-                    ax.autoscale_view(scaley=True)
+        # Get all available chunks efficiently
+        chunks = []
+        total_samples = 0
+        while total_samples < self.max_chunk_size:
+            chunk, _ = self.inlet.pull_chunk(timeout=0.0, max_samples=self.max_chunk_size - total_samples)
+            if not chunk:
+                break
+            chunks.extend(chunk)
+            total_samples += len(chunk)
             
-            # redesenhar tela de forma eficiente
-            self.canvas.draw_idle()
-
-        # Lógica de captura: acumular dados por 5 segundos
-        if self.capturing and chunk:
-            for sample in chunk:
-                self.capture_buffer.append(sample)
-            self.sample_count += len(chunk)
+        if not chunks:
+            return
+            
+        # Process all chunks at once
+        arr = np.array(chunks).T
+        filtered_chunk = self.filter.filter_stream(arr)
+        
+        # Update buffers with vectorized operations
+        for ch_idx, channel_samples in enumerate(filtered_chunk):
+            self.buffer[ch_idx].extend(channel_samples)
+        
+        # Only update plot if enough time has passed
+        self.last_update_time = current_time
+        
+        # Fast plot update using blitting
+        if self.background is not None:
+            self.canvas.restore_region(self.background)
+            
+            # Get all channel data at once
+            buffer_data = [np.array(list(b)) for b in self.buffer]
+            
+            # Update all lines efficiently
+            for idx, (line, data) in enumerate(zip(self.lines, buffer_data)):
+                line.set_data(self.buffer_x[:len(data)], data)
+                self.axes[idx].draw_artist(line)
+                
+                # Update y-limits if needed (less frequently)
+                if self.process_check.isChecked() and idx % 3 == current_time % 3:  # Stagger updates
+                    data_min, data_max = data.min(), data.max()
+                    current_ymin, current_ymax = self.axes[idx].get_ylim()
+                    if data_min < current_ymin or data_max > current_ymax:
+                        margin = (data_max - data_min) * 0.1
+                        self.axes[idx].set_ylim(data_min - margin, data_max + margin)
+                        self.need_redraw = True
+            
+            # Efficient canvas updates
+            self.canvas.blit(self.figure.bbox)
+            
+            # Full redraw only when necessary
+            if self.need_redraw:
+                self.canvas.draw()
+                self.background = self.canvas.copy_from_bbox(self.figure.bbox)
+                self.need_redraw = False
+        
+        # Handle data capture if active
+        if self.capturing and chunks:
+            self.capture_buffer.extend(chunks)
+            self.sample_count += len(chunks)
             if self.sample_count >= self.capture_needed:
                 self.capturing = False
                 self.capture_button.setEnabled(True)
@@ -246,21 +311,21 @@ class StreamingWidget(QWidget):
                 np.save(filename, data_arr)
                 logging.info(f"Dados capturados salvos em {filename}")
 
-        # Classificação em tempo real com janela deslizante
-        if hasattr(self, 'bci') and self.bci.is_calibrated and self.buffer and self.window_size:
-            if len(self.buffer[0]) >= self.window_size:
-                self.sample_since_last += len(chunk)
-                if self.sample_since_last >= self.window_step:
-                    self.sample_since_last = 0                    # extrair últimas amostras de window_size
-                    window_data = np.array([list(self.buffer[i])[-self.window_size:] for i in range(len(self.buffer))])
-                    
-                    # Get prediction
-                    pred, conf = self.bci.predict_movement(window_data)
-                    
-                    # Atualizar rótulos da GUI
-                    self.pred_label.setText(f"Pred: {pred}")
-                    self.conf_label.setText(f"Conf: {conf:.2%}")
-                    logging.info(f"Predição do modelo: {pred} (confiança {conf:.2%}) na janela de {self.window_size} amostras")
+        # Classification with sliding window
+        if hasattr(self, 'bci') and self.bci.is_calibrated and self.buffer:
+            self.sample_since_last += len(chunks)
+            if self.sample_since_last >= self.window_step and len(self.buffer[0]) >= self.window_size:
+                self.sample_since_last = 0
+                # Extract window data efficiently
+                window_data = np.array([list(b)[-self.window_size:] for b in self.buffer])
+                
+                # Get prediction
+                pred, conf = self.bci.predict_movement(window_data)
+                
+                # Update UI labels
+                self.pred_label.setText(f"Pred: {pred}")
+                self.conf_label.setText(f"Conf: {conf:.2%}")
+                logging.info(f"Predição do modelo: {pred} (confiança {conf:.2%})")
 
     def on_model_change(self, index):
         """Lidar com seleção de checkpoint"""
