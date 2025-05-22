@@ -15,7 +15,7 @@ from .EEGDataLoader import load_local_eeg_data
 from .ModelTracker import get_device
 
 class MultiSubjectTest:
-    def __init__(self, train_samples=40, test_samples=20, model_path=None):
+    def __init__(self, train_samples=36, test_samples=9, model_path=None):
         self.train_samples = train_samples
         self.test_samples = test_samples
         self.model_path = model_path  # path to save trained model

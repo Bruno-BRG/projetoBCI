@@ -10,11 +10,24 @@ import numpy as np
 from .AvgMeter import AvgMeter
 
 class ModelWrapper(L.LightningModule):
-    def __init__(self, arch, dataset, batch_size, lr, max_epoch):
+    def __init__(self, arch, dataset, batch_size, lr, max_epoch, test_dataset=None):
+        """
+        Lightning Module wrapper for EEG Classification Model
+        
+        Args:
+            arch: The model architecture
+            dataset: The main dataset for training and validation
+            batch_size: Batch size for training
+            lr: Learning rate
+            max_epoch: Maximum number of epochs
+            test_dataset: Optional separate test dataset. If None, will use the test split 
+                          from the main dataset
+        """
         super().__init__()
 
         self.arch = arch
         self.dataset = dataset
+        self.test_dataset = test_dataset
         self.batch_size = batch_size
         self.lr = lr
         self.max_epoch = max_epoch
@@ -147,13 +160,22 @@ class ModelWrapper(L.LightningModule):
             batch_size=self.batch_size,
             shuffle=False,
         )
-
+        
     def test_dataloader(self):
-        return torch.utils.data.DataLoader(
-            dataset=self.dataset.split("test"),
-            batch_size=1,
-            shuffle=False,
-        )
+        if self.test_dataset is not None:
+            # Use the separate test dataset if provided
+            return torch.utils.data.DataLoader(
+                dataset=self.test_dataset.split("test"),
+                batch_size=self.batch_size,  # Use the same batch size for testing
+                shuffle=False,
+            )
+        else:
+            # Fall back to the test split from the main dataset
+            return torch.utils.data.DataLoader(
+                dataset=self.dataset.split("test"),
+                batch_size=self.batch_size,
+                shuffle=False,
+            )
 
     def configure_optimizers(self):
         optimizer = optim.Adam(

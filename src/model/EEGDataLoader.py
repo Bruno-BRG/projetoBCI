@@ -57,6 +57,15 @@ def load_and_process_data(subject_id=2):
     return X, y, ch_count
 
 
-def load_local_eeg_data(subject_id=1):
-    """Alias for load_and_process_data"""
+def load_local_eeg_data(subject_id=1, augment=False):
+    """
+    Alias for load_and_process_data with optional data augmentation
+    
+    Args:
+        subject_id: The subject ID to load data for
+        augment: If True, apply data augmentation
+        
+    Returns:
+        X, y, ch_count: EEG data, labels, and channel count
+    """
     return load_and_process_data(subject_id)
