@@ -9,7 +9,7 @@ SFREQ = 125  # OpenBCI sampling rate (Hz)
 RUNS = [4, 8, 12]
 
 
-def load_and_process_data(subject_id=1):
+def load_and_process_data(subject_id=2):
     """
     Load EEG data for a subject, extract epochs, and apply bandpass filter (4-50 Hz).
     Returns:

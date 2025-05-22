@@ -6,7 +6,7 @@ class EEGFilter:
     """
     EEGFilter provides bandpass filtering methods for streaming (LSL) and offline (calibration/real-use) EEG data.
     """
-    def __init__(self, sfreq=250.0, l_freq=4.0, h_freq=50.0, method='iir', iir_params=None):
+    def __init__(self, sfreq=125.0, l_freq=8.0, h_freq=30.0, method='iir', iir_params=None):
         self.sfreq = sfreq
         self.l_freq = l_freq
         self.h_freq = h_freq
