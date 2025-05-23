@@ -20,11 +20,11 @@ class ModelWrapper(L.LightningModule):
             batch_size: Batch size for training
             lr: Learning rate
             max_epoch: Maximum number of epochs
-            test_dataset: Optional separate test dataset. If None, will use the test split 
-                          from the main dataset
+            test_dataset: Optional separate test dataset
         """
         super().__init__()
-
+        self.save_hyperparameters(ignore=['arch', 'dataset', 'test_dataset'])
+        
         self.arch = arch
         self.dataset = dataset
         self.test_dataset = test_dataset
@@ -32,21 +32,23 @@ class ModelWrapper(L.LightningModule):
         self.lr = lr
         self.max_epoch = max_epoch
 
+        # Binary classification metrics for each phase
         self.train_accuracy = torchmetrics.Accuracy(task="binary")
         self.val_accuracy = torchmetrics.Accuracy(task="binary")
         self.test_accuracy = torchmetrics.Accuracy(task="binary")
 
+        # Automatic optimization disabled for custom training loop
         self.automatic_optimization = False
 
+        # History tracking
         self.train_loss = []
         self.val_loss = []
-
         self.train_acc = []
         self.val_acc = []
 
+        # Moving average meters for smoother metrics
         self.train_loss_recorder = AvgMeter()
         self.val_loss_recorder = AvgMeter()
-
         self.train_acc_recorder = AvgMeter()
         self.val_acc_recorder = AvgMeter()
 
@@ -60,26 +62,28 @@ class ModelWrapper(L.LightningModule):
         self.train_accuracy.update(y_hat, y)
         acc = self.train_accuracy.compute().detach().cpu()
 
+        # Manual optimization
         opt = self.optimizers()
         opt.zero_grad()
         self.manual_backward(loss)
         opt.step()
 
+        # Update metrics
         self.train_loss_recorder.update(loss.detach())
-        self.train_acc_recorder.update(acc)
+        self.train_acc_recorder.update(acc)        # Log metrics - only essential metrics in progress bar
+        # Log detailed metrics to TensorBoard
+        self.log_dict({
+            "train/loss": loss,
+            "train/accuracy": acc,
+        }, prog_bar=False, logger=True)
+        
+        # Log minimal metrics to progress bar
+        self.log_dict({
+            "loss": loss,
+            "acc": acc,
+        }, prog_bar=True, logger=False)
 
-        self.log("train_loss", loss, prog_bar=True)
-        self.log("train_acc", acc, prog_bar=True)
-
-    def on_train_epoch_end(self):
-        sch = self.lr_schedulers()
-        sch.step()
-
-        self.train_loss.append(self.train_loss_recorder.show().detach().cpu().numpy())
-        self.train_loss_recorder = AvgMeter()
-
-        self.train_acc.append(self.train_acc_recorder.show().detach().cpu().numpy())
-        self.train_acc_recorder = AvgMeter()
+        return loss
 
     def validation_step(self, batch, batch_nb):
         x, y = batch
@@ -88,17 +92,39 @@ class ModelWrapper(L.LightningModule):
         self.val_accuracy.update(y_hat, y)
         acc = self.val_accuracy.compute().detach().cpu()
 
+        # Update metrics
         self.val_loss_recorder.update(loss.detach())
-        self.val_acc_recorder.update(acc)
+        self.val_acc_recorder.update(acc)        # Log metrics
+        metrics = {
+            "val_loss": loss,
+            "val_acc": acc,
+            "val/loss": loss,  # For TensorBoard
+            "val/accuracy": acc,
+        }
+        self.log_dict(metrics, prog_bar=False, logger=True, on_step=False, on_epoch=True)
 
-        self.log("val_loss", loss, prog_bar=True)
-        self.log("val_acc", acc, prog_bar=True)
+        return loss
+
+    def on_train_epoch_end(self):
+        # Step the learning rate scheduler
+        sch = self.lr_schedulers()
+        sch.step()
+
+        # Record metrics for this epoch
+        self.train_loss.append(self.train_loss_recorder.show().detach().cpu().numpy())
+        self.train_acc.append(self.train_acc_recorder.show().detach().cpu().numpy())
+
+        # Reset meters for next epoch
+        self.train_loss_recorder = AvgMeter()
+        self.train_acc_recorder = AvgMeter()
 
     def on_validation_epoch_end(self):
+        # Record metrics for this epoch
         self.val_loss.append(self.val_loss_recorder.show().detach().cpu().numpy())
-        self.val_loss_recorder = AvgMeter()
-
         self.val_acc.append(self.val_acc_recorder.show().detach().cpu().numpy())
+
+        # Reset meters for next epoch
+        self.val_loss_recorder = AvgMeter()
         self.val_acc_recorder = AvgMeter()
 
     def test_step(self, batch, batch_nb):
@@ -107,45 +133,42 @@ class ModelWrapper(L.LightningModule):
         loss = F.binary_cross_entropy_with_logits(y_hat, y)
         self.test_accuracy.update(y_hat, y)
 
-        self.log(
-            "test_loss",
-            loss,
-            prog_bar=True,
-            logger=True,
+        # Log metrics
+        metrics = {
+            "test_loss": loss,
+            "test_acc": self.test_accuracy.compute(),
+            "test/loss": loss,
+            "test/accuracy": self.test_accuracy.compute(),
+        }
+        self.log_dict(metrics, prog_bar=True, logger=True, on_step=False, on_epoch=True)
+
+        return loss
+
+    def configure_optimizers(self):
+        optimizer = optim.Adam(
+            self.parameters(),
+            lr=self.lr,
+            weight_decay=0.01  # L2 regularization
         )
-        self.log(
-            "test_acc",
-            self.test_accuracy.compute(),
-            prog_bar=True,
-            logger=True,
-        )
+        lr_scheduler = {
+            "scheduler": optim.lr_scheduler.MultiStepLR(
+                optimizer,
+                milestones=[
+                    int(self.max_epoch * 0.25),
+                    int(self.max_epoch * 0.5),
+                    int(self.max_epoch * 0.75),
+                ],
+                gamma=0.1
+            ),
+            "name": "learning_rate",
+            "interval": "epoch",
+            "frequency": 1,
+        }
+        return [optimizer], [lr_scheduler]
 
     def on_train_end(self):
-        # Loss
-        loss_img_file = "loss_plot.png"
-        plt.figure(figsize=(8, 4))
-        plt.plot(self.train_loss, color = 'r', label='train')
-        plt.plot(self.val_loss, color = 'b', label='validation')
-        plt.title("Loss Curves")
-        plt.xlabel("Epoch")
-        plt.ylabel("Loss")
-        plt.legend()
-        plt.grid()
-        plt.savefig(loss_img_file)
-        plt.close()
-
-        # Accuracy
-        acc_img_file = "acc_plot.png"
-        plt.figure(figsize=(8, 4))
-        plt.plot(self.train_acc, color = 'r', label='train')
-        plt.plot(self.val_acc, color = 'b', label='validation')
-        plt.title("Accuracy Curves")
-        plt.xlabel("Epoch")
-        plt.ylabel("Accuracy")
-        plt.legend()
-        plt.grid()
-        plt.savefig(acc_img_file)
-        plt.close()
+        # Plot final training curves
+        self._plot_metrics()
 
     def train_dataloader(self):
         return torch.utils.data.DataLoader(
@@ -177,21 +200,28 @@ class ModelWrapper(L.LightningModule):
                 shuffle=False,
             )
 
-    def configure_optimizers(self):
-        optimizer = optim.Adam(
-            self.parameters(),
-            lr=self.lr,
-        )
-        lr_scheduler = {
-            "scheduler": optim.lr_scheduler.MultiStepLR(
-                optimizer,
-                milestones=[
-                    int(self.max_epoch * 0.25),
-                    int(self.max_epoch * 0.5),
-                    int(self.max_epoch * 0.75),
-                ],
-                gamma=0.1
-            ),
-            "name": "lr_scheduler",
-        }
-        return [optimizer], [lr_scheduler]
+    def _plot_metrics(self):
+        """Plot training metrics at the end of training."""
+        # Loss curves
+        plt.figure(figsize=(10, 4))
+        plt.plot(self.train_loss, color='r', label='Training Loss')
+        plt.plot(self.val_loss, color='b', label='Validation Loss')
+        plt.title('Training and Validation Loss')
+        plt.xlabel('Epoch')
+        plt.ylabel('Loss')
+        plt.legend()
+        plt.grid(True)
+        plt.savefig('loss_plot.png')
+        plt.close()
+
+        # Accuracy curves
+        plt.figure(figsize=(10, 4))
+        plt.plot(self.train_acc, color='r', label='Training Accuracy')
+        plt.plot(self.val_acc, color='b', label='Validation Accuracy')
+        plt.title('Training and Validation Accuracy')
+        plt.xlabel('Epoch')
+        plt.ylabel('Accuracy')
+        plt.legend()
+        plt.grid(True)
+        plt.savefig('accuracy_plot.png')
+        plt.close()

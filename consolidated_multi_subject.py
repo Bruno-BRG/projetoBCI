@@ -122,7 +122,7 @@ def main():
     X, y, eeg_channel = load_local_eeg_data(subject_ids)
     eeg_dataset = EEGDataset(x=X, y=y)
     # Hyperparameters
-    MAX_EPOCH = 40
+    MAX_EPOCH = 10
     BATCH_SIZE = 10
     LR = 5e-4
     MODEL_NAME = "EEGClassificationModel"
@@ -131,32 +131,61 @@ def main():
     model = EEGClassificationModel(eeg_channel=eeg_channel, dropout=0.125)
     model_wrapper = ModelWrapper(model, eeg_dataset, BATCH_SIZE, LR, MAX_EPOCH)
 
-    tensorboardlogger = TensorBoardLogger(save_dir="logs/")
+    # Set up logging configuration
+    import logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(levelname)s: %(message)s'
+    )
+
+    # Configure loggers
+    tensorboardlogger = TensorBoardLogger(
+        save_dir="logs/",
+        name="lightning_logs",
+        log_graph=True
+    )
     csvlogger = CSVLogger(save_dir="logs/")
+    
+    # Configure callbacks
     lr_monitor = LearningRateMonitor(logging_interval='step')
     checkpoint = ModelCheckpoint(
         monitor='val_acc',
         dirpath=CHECKPOINT_DIR,
         mode='max',
+        save_top_k=1,
+        filename=f'{MODEL_NAME}-{{epoch:02d}}-{{val_acc:.2f}}'
     )
     early_stopping = EarlyStopping(
-        monitor="val_acc", min_delta=0.00, patience=3, verbose=False, mode="max"
+        monitor="val_acc",
+        min_delta=0.00,
+        patience=3,
+        verbose=True,
+        mode="max"
     )
 
-
     seed_everything(SEED, workers=True)
-
-
+    
+    # Create trainer with simplified configuration
     trainer = Trainer(
         accelerator="auto",
         devices=1,
         max_epochs=MAX_EPOCH,
         logger=[tensorboardlogger, csvlogger],
-        enable_model_summary=False,  # disable verbose model summary output
         callbacks=[lr_monitor, checkpoint, early_stopping],
         log_every_n_steps=5,
+        enable_progress_bar=True
     )
+    
     trainer.fit(model_wrapper)
+
+    # Run test on best checkpoint
+    trainer.test(model=model_wrapper, ckpt_path="best")
+
+    # Save and rename best checkpoint
+    os.rename(
+        checkpoint.best_model_path,
+        os.path.join(CHECKPOINT_DIR, f"{MODEL_NAME}_best.ckpt")
+    )
 
     # Plot loss curves
     plt.figure(figsize=(8, 4))
