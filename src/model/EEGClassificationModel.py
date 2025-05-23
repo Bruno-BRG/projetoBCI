@@ -75,10 +75,6 @@ class EEGClassificationModel(nn.Module):
         
         return x
         
-        # MLP classifier
-        x = self.mlp(x)
-        
-        return x
     
     def training_step(self, batch, batch_idx):
         x, y = batch
