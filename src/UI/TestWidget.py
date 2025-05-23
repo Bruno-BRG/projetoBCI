@@ -99,17 +99,33 @@ class TestWidget(QWidget):
             self.status_label.setText("Teste cancelado: nenhum nome de modelo fornecido")
             self.start_test_button.setEnabled(True)
             return
+            
+        # Ask about fast mode
+        fast_mode_reply = QMessageBox.question(self, 'Modo Rápido', 
+                                    'Deseja usar o modo rápido? (Recomendado para CPU)',
+                                    QMessageBox.Yes | QMessageBox.No, 
+                                    QMessageBox.Yes)
+        fast_mode = fast_mode_reply == QMessageBox.Yes
+        
         model_filename = f"{name}.pth"
         os.makedirs('checkpoints', exist_ok=True)
         model_path = os.path.join('checkpoints', model_filename)
         try:
             # Inicializar sistema de teste com o caminho de salvamento fornecido
-            self.test_system = MultiSubjectTest(train_samples=40, test_samples=20, model_path=model_path)
+            self.test_system = MultiSubjectTest(
+                train_samples=40, 
+                test_samples=20, 
+                model_path=model_path,
+                fast_mode=fast_mode
+            )
              
+            # Set number of epochs based on fast mode
+            num_epochs = 30 if fast_mode else 100
+            
             # Executar treinamento e avaliação
             history = self.test_system.train_and_evaluate(
-                num_epochs=100,
-                batch_size=10,
+                num_epochs=num_epochs,
+                batch_size=32 if fast_mode else 10,  # Larger batch size for CPU
                 learning_rate=5e-4
             )
             

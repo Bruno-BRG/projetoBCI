@@ -8,27 +8,21 @@ import os
 import sys
 import time
 from pathlib import Path
+# Ensure model directory is on sys.path for local imports when running as script
 
-import torch
-import torch.nn as nn
-import torch.optim as optim
-import torch.nn.functional as F
-import numpy as np
 import matplotlib.pyplot as plt
 import pytorch_lightning as L
 from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger, CSVLogger
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
-from torch.utils.data import TensorDataset, DataLoader
-from sklearn.model_selection import train_test_split
 
 # Import local modules
-from src.model.EEGDataset import EEGDataset
-from src.model.EEGClassificationModel import EEGClassificationModel
-from src.model.ModelWrapper import ModelWrapper
-from src.model.EEGDataLoader import load_local_eeg_data
-from src.model.ModelTracker import get_device
+from EEGDataset import EEGDataset
+from EEGClassificationModel import EEGClassificationModel
+from ModelWrapper import ModelWrapper
+from EEGDataLoader import load_local_eeg_data
+from ModelTracker import get_device
 
 # Set random seed for reproducibility
 SEED = 42
@@ -118,11 +112,11 @@ class ConsolidatedMultiSubjectTrainer:
 def main():
     """Main function to run the consolidated multi-subject training"""
     # Load EEG data from all available subjects (1-109)
-    subject_ids = list(range(1, 21))
+    subject_ids = list(range(1, 2))
     X, y, eeg_channel = load_local_eeg_data(subject_ids)
     eeg_dataset = EEGDataset(x=X, y=y)
     # Hyperparameters
-    MAX_EPOCH = 10
+    MAX_EPOCH = 40
     BATCH_SIZE = 10
     LR = 5e-4
     MODEL_NAME = "EEGClassificationModel"

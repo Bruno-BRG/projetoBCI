@@ -2,48 +2,82 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .PositionalEncoding import PositionalEncoding
-from .TransformerBlock import TransformerBlock
+try:
+    from .PositionalEncoding import PositionalEncoding
+except ImportError:
+    from PositionalEncoding import PositionalEncoding
+try:
+    from .TransformerBlock import TransformerBlock
+except ImportError:
+    from TransformerBlock import TransformerBlock
 
 class EEGClassificationModel(nn.Module):
     """
     Transformer-based EEG classification model with convolutional front-end.
     This implementation directly matches the structure from the EEG_mne_cnn.ipynb notebook.
     """
-    def __init__(self, eeg_channel, dropout=0.1):
+    def __init__(self, eeg_channel, dropout=0.1, fast_model=False):
         super().__init__()
-
-        # Convolutional front-end
-        self.conv = nn.Sequential(
-            nn.Conv1d(
-                eeg_channel, eeg_channel, 11, 1, padding=5, bias=False
-            ),
-            nn.BatchNorm1d(eeg_channel),
-            nn.ReLU(True),
-            nn.Dropout1d(dropout),
-            nn.Conv1d(
-                eeg_channel, eeg_channel * 2, 11, 1, padding=5, bias=False
-            ),
-            nn.BatchNorm1d(eeg_channel * 2),
-        )
         
-        # Transformer encoder
-        self.transformer = nn.Sequential(
-            PositionalEncoding(eeg_channel * 2, dropout),
-            TransformerBlock(eeg_channel * 2, 4, eeg_channel // 8, dropout),
-            TransformerBlock(eeg_channel * 2, 4, eeg_channel // 8, dropout),
-        )
+        # Use a simpler, faster model architecture if requested
+        self.fast_model = fast_model
         
-        # Output MLP
-        self.mlp = nn.Sequential(
-            nn.Linear(eeg_channel * 2, eeg_channel // 2),
-            nn.ReLU(True),
-            nn.Dropout(dropout),
-            nn.Linear(eeg_channel // 2, 1),
-        )
+        if fast_model:
+            # Simpler convolutional network for faster training on CPU
+            self.conv = nn.Sequential(
+                nn.Conv1d(eeg_channel, eeg_channel, kernel_size=5, stride=1, padding=2, bias=False),
+                nn.BatchNorm1d(eeg_channel),
+                nn.ReLU(True),
+                nn.Dropout1d(dropout),
+                nn.Conv1d(eeg_channel, eeg_channel * 2, kernel_size=5, stride=1, padding=2, bias=False),
+                nn.BatchNorm1d(eeg_channel * 2),
+                nn.ReLU(True),
+                nn.AvgPool1d(2),  # Downsample to reduce computation
+            )
+            
+            # Simple classifier head - no transformer for faster processing
+            self.classifier = nn.Sequential(
+                nn.Flatten(),  # Flatten the feature maps
+                nn.Linear(eeg_channel * 2 * (250 // 2), eeg_channel * 4),  # Adjust size based on your data
+                nn.ReLU(True),
+                nn.Dropout(dropout),
+                nn.Linear(eeg_channel * 4, eeg_channel // 2),
+                nn.ReLU(True),
+                nn.Dropout(dropout),
+                nn.Linear(eeg_channel // 2, 1),
+            )
+        else:
+            # Original convolutional front-end
+            self.conv = nn.Sequential(
+                nn.Conv1d(
+                    eeg_channel, eeg_channel, 11, 1, padding=5, bias=False
+                ),
+                nn.BatchNorm1d(eeg_channel),
+                nn.ReLU(True),
+                nn.Dropout1d(dropout),
+                nn.Conv1d(
+                    eeg_channel, eeg_channel * 2, 11, 1, padding=5, bias=False
+                ),
+                nn.BatchNorm1d(eeg_channel * 2),
+            )
+            
+            # Transformer encoder
+            self.transformer = nn.Sequential(
+                PositionalEncoding(eeg_channel * 2, dropout),
+                TransformerBlock(eeg_channel * 2, 4, eeg_channel // 8, dropout),
+                TransformerBlock(eeg_channel * 2, 4, eeg_channel // 8, dropout),
+            )
+            
+            # Output MLP
+            self.mlp = nn.Sequential(
+                nn.Linear(eeg_channel * 2, eeg_channel // 2),
+                nn.ReLU(True),
+                nn.Dropout(dropout),
+                nn.Linear(eeg_channel // 2, 1),
+            )
         
         # Log model initialization
-        print(f"EEGClassificationModel initialized with channels={eeg_channel}")
+        print(f"EEGClassificationModel initialized with channels={eeg_channel}, fast_model={fast_model}")
     
     def forward(self, x):
         """
@@ -55,6 +89,13 @@ class EEGClassificationModel(nn.Module):
         Returns:
             Output tensor with predictions
         """
+        if self.fast_model:
+            # Fast model path for CPU
+            x = self.conv(x)
+            x = self.classifier(x)
+            return x
+            
+        # Original model path
         # Pass through convolutional layers
         x = self.conv(x)
         

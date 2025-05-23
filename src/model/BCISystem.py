@@ -1,7 +1,5 @@
 # Importações da biblioteca padrão
 import os
-import logging
-from datetime import datetime
 
 # Importações de terceiros
 import torch

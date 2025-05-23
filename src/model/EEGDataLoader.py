@@ -1,7 +1,12 @@
 import os
 import numpy as np
 import pandas as pd
-from .EEGFilter import EEGFilter
+from pathlib import Path
+
+try:
+    from .EEGFilter import EEGFilter
+except ImportError:
+    from EEGFilter import EEGFilter
 
 
 # Constants for epoch extraction
@@ -25,13 +30,16 @@ def load_and_process_data(subject_ids=2):
     X_list, y_list = [], []
     # Initialize filter once
     eeg_filter = EEGFilter(sfreq=SFREQ)
+    # Determine absolute path to eeg_data folder at project root
+    project_root = Path(__file__).resolve().parents[2]
+    data_root = project_root / 'eeg_data' / 'MNE-eegbci-data' / 'files' / 'eegmmidb' / '1.0.0'
     for subject_id in subject_ids:
-        subj_dir = os.path.join('eeg_data', 'MNE-eegbci-data', 'files', 'eegmmidb', '1.0.0', f'S{subject_id:03d}')
+        subj_dir = data_root / f'S{subject_id:03d}'
         for run in RUNS:
-            csv_path = os.path.join(subj_dir, f'S{subject_id:03d}R{run:02d}_csv_openbci.csv')
-            if not os.path.exists(csv_path):
+            csv_path = subj_dir / f'S{subject_id:03d}R{run:02d}_csv_openbci.csv'
+            if not csv_path.exists():
                 continue
-            df = pd.read_csv(csv_path, comment='%', engine='python', on_bad_lines='skip')
+            df = pd.read_csv(str(csv_path), comment='%', engine='python', on_bad_lines='skip')
             eeg_cols = [col for col in df.columns if col.startswith('EXG Channel')]
             # extract continuous data and apply bandpass filter
             data = df[eeg_cols].values.T

@@ -1,16 +1,19 @@
 import torch
-import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 import pytorch_lightning as L
 import matplotlib.pyplot as plt
 import torchmetrics
-import numpy as np
 
-from .AvgMeter import AvgMeter
+
+
+try:
+    from .AvgMeter import AvgMeter
+except ImportError:
+    from AvgMeter import AvgMeter
 
 class ModelWrapper(L.LightningModule):
-    def __init__(self, arch, dataset, batch_size, lr, max_epoch, test_dataset=None):
+    def __init__(self, arch, dataset, batch_size, lr, max_epoch, test_dataset=None, cpu_optimize=True, fast_mode=False):
         """
         Lightning Module wrapper for EEG Classification Model
         
@@ -21,6 +24,8 @@ class ModelWrapper(L.LightningModule):
             lr: Learning rate
             max_epoch: Maximum number of epochs
             test_dataset: Optional separate test dataset
+            cpu_optimize: Whether to apply CPU-specific optimizations
+            fast_mode: Enable fast mode with less validation and simpler processing
         """
         super().__init__()
         self.save_hyperparameters(ignore=['arch', 'dataset', 'test_dataset'])
@@ -31,6 +36,15 @@ class ModelWrapper(L.LightningModule):
         self.batch_size = batch_size
         self.lr = lr
         self.max_epoch = max_epoch
+        self.fast_mode = fast_mode
+        
+        # Apply CPU optimizations if requested
+        if cpu_optimize and not torch.cuda.is_available():
+            # Set number of threads for better CPU performance
+            torch.set_num_threads(max(4, torch.get_num_threads()))
+            if hasattr(torch, 'set_num_interop_threads'):
+                torch.set_num_interop_threads(max(4, torch.get_num_interop_threads()))
+            print(f"CPU optimization: Using {torch.get_num_threads()} computation threads")
 
         # Binary classification metrics for each phase
         self.train_accuracy = torchmetrics.Accuracy(task="binary")
@@ -51,11 +65,14 @@ class ModelWrapper(L.LightningModule):
         self.val_loss_recorder = AvgMeter()
         self.train_acc_recorder = AvgMeter()
         self.val_acc_recorder = AvgMeter()
+        
+        # Validation frequency (validate less often in fast mode)
+        self.val_check_interval = 5 if fast_mode else 1
 
     def forward(self, x):
         return self.arch(x)
 
-    def training_step(self, batch, batch_nb):
+    def training_step(self, batch):
         x, y = batch
         y_hat = self(x)
         loss = F.binary_cross_entropy_with_logits(y_hat, y)
@@ -85,7 +102,7 @@ class ModelWrapper(L.LightningModule):
 
         return loss
 
-    def validation_step(self, batch, batch_nb):
+    def validation_step(self, batch):
         x, y = batch
         y_hat = self(x)
         loss = F.binary_cross_entropy_with_logits(y_hat, y)
@@ -175,6 +192,9 @@ class ModelWrapper(L.LightningModule):
             dataset=self.dataset.split("train"),
             batch_size=self.batch_size,
             shuffle=True,
+            num_workers=0,  # Best for CPU is often 0 workers
+            pin_memory=False,  # Pin memory is more beneficial for GPU
+            persistent_workers=False,
         )
 
     def val_dataloader(self):
@@ -182,6 +202,8 @@ class ModelWrapper(L.LightningModule):
             dataset=self.dataset.split("val"),
             batch_size=self.batch_size,
             shuffle=False,
+            num_workers=0,  # Best for CPU is often 0 workers
+            pin_memory=False,
         )
         
     def test_dataloader(self):
@@ -191,6 +213,7 @@ class ModelWrapper(L.LightningModule):
                 dataset=self.test_dataset.split("test"),
                 batch_size=self.batch_size,  # Use the same batch size for testing
                 shuffle=False,
+                num_workers=0,
             )
         else:
             # Fall back to the test split from the main dataset
@@ -198,6 +221,7 @@ class ModelWrapper(L.LightningModule):
                 dataset=self.dataset.split("test"),
                 batch_size=self.batch_size,
                 shuffle=False,
+                num_workers=0,
             )
 
     def _plot_metrics(self):
