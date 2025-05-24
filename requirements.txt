@@ -9,6 +9,7 @@ torchmetrics>=0.10.0
 
 # EEG and Signal Processing
 mne>=1.0.0
+braindecode>=0.8.0
 
 # Scientific Computing
 numpy>=1.21.0

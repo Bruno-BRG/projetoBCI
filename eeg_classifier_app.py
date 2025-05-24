@@ -23,8 +23,6 @@ from PyQt5.QtGui import QFont, QPalette, QColor
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import mne
-from mne.io import concatenate_raws
 import pytorch_lightning as pl
 from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.loggers import TensorBoardLogger, CSVLogger
@@ -34,7 +32,7 @@ from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from torchmetrics.classification import Accuracy
 
 # Import our custom modules
-from eeg_model import EEGClassificationModel, ModelWrapper, EEGDataset, AvgMeter
+from model import EEGModel, ModelWrapper, EEGData, AvgMeter
 from data_processor import EEGDataProcessor
 
 
@@ -107,7 +105,7 @@ class TrainingThread(QThread):
             import time
             from pytorch_lightning import Trainer
             from pytorch_lightning.callbacks import Callback
-            from eeg_model import ModelWrapper  # Import here to avoid PyQt5 issues
+            from model import ModelWrapper  # Import here to avoid PyQt5 issues
             
             self.start_time = time.time()
             self.log_update.emit("Starting training...")
@@ -171,15 +169,15 @@ class TrainingThread(QThread):
                                 eta_str = f"{eta_hours:.1f}h"
                                 
                             self.thread_ref.time_update.emit(f"Epoch: {epoch_time:.1f}s | ETA: {eta_str}")
-                        
-                        # Get current metrics
-                        if hasattr(pl_module, 'train_loss') and hasattr(pl_module, 'val_loss'):
+                          # Get current metrics from the model's epoch_metrics
+                        if hasattr(pl_module, 'epoch_metrics'):
+                            epoch_metrics = pl_module.epoch_metrics
                             metrics = {
                                 'epoch': current_epoch,
-                                'train_loss': pl_module.train_loss[-1] if pl_module.train_loss else 0,
-                                'val_loss': pl_module.val_loss[-1] if pl_module.val_loss else 0,
-                                'train_acc': pl_module.train_acc[-1] if pl_module.train_acc else 0,
-                                'val_acc': pl_module.val_acc[-1] if pl_module.val_acc else 0,
+                                'train_loss': epoch_metrics['train_loss'][-1] if epoch_metrics['train_loss'] else 0,
+                                'val_loss': epoch_metrics['val_loss'][-1] if epoch_metrics['val_loss'] else 0,
+                                'train_acc': epoch_metrics['train_acc'][-1] if epoch_metrics['train_acc'] else 0,
+                                'val_acc': epoch_metrics['val_acc'][-1] if epoch_metrics['val_acc'] else 0,
                                 'epoch_time': epoch_time
                             }
                             self.thread_ref.epoch_metrics_update.emit(metrics)
@@ -538,7 +536,7 @@ class EEGClassifierApp(QMainWindow):
             X, y, info = self.data_processor.load_data(n_subjects)
             
             # Create dataset
-            self.dataset = EEGDataset(x=X, y=y)
+            self.dataset = EEGData(x=X, y=y)
             
             self.data_log.append(f"Data loaded successfully!")
             self.data_log.append(f"Shape: {X.shape}")
@@ -594,7 +592,7 @@ class EEGClassifierApp(QMainWindow):
             
             # Create model
             eeg_channel = self.X.shape[1]  # Number of EEG channels
-            model = EEGClassificationModel(
+            model = EEGModel(
                 eeg_channel=eeg_channel, 
                 dropout=self.dropout_spinbox.value()
             )
@@ -655,8 +653,7 @@ class EEGClassifierApp(QMainWindow):
             self.training_thread.stop_training()  # Signal the thread to stop gracefully
             self.training_thread.wait(3000)  # Wait up to 3 seconds
             if self.training_thread.isRunning():
-                self.training_thread.terminate()  # Force terminate if needed
-            self.training_log.append("Training stopped by user.")
+                self.training_thread.terminate()  # Force terminate if needed            self.training_log.append("Training stopped by user.")
             
         self.train_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
@@ -666,6 +663,8 @@ class EEGClassifierApp(QMainWindow):
     def training_completed(self, model):
         """Handle training completion"""
         import time
+        import os
+        from datetime import datetime
         
         self.model = model
         self.train_btn.setEnabled(True)
@@ -693,30 +692,206 @@ class EEGClassifierApp(QMainWindow):
             self.time_label.setText(f"Total time: {time_str}")
             self.eta_label.setText("✓ Complete")
         
-        # Plot final training curves
-        if hasattr(self.model, 'train_loss') and self.model.train_loss:
+        # Create training results folder
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        results_folder = os.path.join(os.getcwd(), "training_results", f"training_{timestamp}")
+        os.makedirs(results_folder, exist_ok=True)
+        
+        # Extract training metrics from the model's epoch_metrics
+        if hasattr(self.model, 'epoch_metrics') and self.model.epoch_metrics['train_loss']:
+            train_loss = self.model.epoch_metrics['train_loss']
+            val_loss = self.model.epoch_metrics['val_loss']
+            train_acc = self.model.epoch_metrics['train_acc'] 
+            val_acc = self.model.epoch_metrics['val_acc']
+            
+            # Plot training curves in GUI
             self.training_canvas.plot_training_curves(
-                self.model.train_loss,
-                self.model.val_loss,
-                self.model.train_acc,
-                self.model.val_acc
+                train_loss, val_loss, train_acc, val_acc
             )
             
-            # Log final metrics
-            final_train_loss = self.model.train_loss[-1] if self.model.train_loss else "N/A"
-            final_val_loss = self.model.val_loss[-1] if self.model.val_loss else "N/A"
-            final_train_acc = self.model.train_acc[-1] if self.model.train_acc else "N/A"
-            final_val_acc = self.model.val_acc[-1] if self.model.val_acc else "N/A"
+            # Generate and save comprehensive training plots
+            self.log_update_signal("📊 Generating training plots...")
+            fig = self.model.plot_training_curves()
+            if fig:
+                # Save the matplotlib figure
+                plot_path = os.path.join(results_folder, "training_curves.png")
+                fig.savefig(plot_path, dpi=300, bbox_inches='tight')
+                self.log_update_signal(f"✓ Training curves saved: {plot_path}")
+                
+                # Also save as PDF for high quality
+                pdf_path = os.path.join(results_folder, "training_curves.pdf")
+                fig.savefig(pdf_path, bbox_inches='tight')
+                self.log_update_signal(f"✓ PDF version saved: {pdf_path}")
+                
+                # Close the figure to free memory
+                plt.close(fig)
+              # Save training metrics as CSV
+            self.save_training_metrics_csv(results_folder)
             
-            self.training_log.append("=" * 50)
-            self.training_log.append("TRAINING SUMMARY:")
-            self.training_log.append(f"Final Train Loss: {final_train_loss:.4f}" if isinstance(final_train_loss, float) else f"Final Train Loss: {final_train_loss}")
-            self.training_log.append(f"Final Val Loss: {final_val_loss:.4f}" if isinstance(final_val_loss, float) else f"Final Val Loss: {final_val_loss}")
-            self.training_log.append(f"Final Train Acc: {final_train_acc:.3f}" if isinstance(final_train_acc, float) else f"Final Train Acc: {final_train_acc}")
-            self.training_log.append(f"Final Val Acc: {final_val_acc:.3f}" if isinstance(final_val_acc, float) else f"Final Val Acc: {final_val_acc}")
-            self.training_log.append(f"Best Val Loss: {self.best_metrics['val_loss']:.4f}")
-            self.training_log.append(f"Best Val Acc: {self.best_metrics['val_acc']:.3f}")
-            self.training_log.append("=" * 50)
+            # Copy confusion matrix files if they exist
+            self.copy_confusion_matrices(results_folder)
+            
+            # Save model checkpoint
+            model_path = os.path.join(results_folder, "final_model.ckpt")
+            torch.save(self.model.state_dict(), model_path)
+            self.log_update_signal(f"✓ Model saved: {model_path}")
+              # Save training summary
+            self.save_training_summary(results_folder, total_time if self.training_start_time else 0)
+            
+            self.log_update_signal(f"🎉 All training results saved to: {results_folder}")
+        else:
+            self.log_update_signal("⚠ No training metrics found to plot")
+
+    def log_update_signal(self, message):
+        """Helper method to update training log"""
+        self.training_log.append(message)
+
+    def save_training_metrics_csv(self, results_folder):
+        """Save training metrics to CSV file"""
+        try:
+            import csv
+            csv_path = os.path.join(results_folder, "training_metrics.csv")
+            
+            # Get max length of all metric lists
+            max_epochs = max(
+                len(self.model.epoch_metrics['train_loss']),
+                len(self.model.epoch_metrics['val_loss']),
+                len(self.model.epoch_metrics['train_acc']),
+                len(self.model.epoch_metrics['val_acc'])
+            )
+            
+            with open(csv_path, 'w', newline='') as csvfile:
+                writer = csv.writer(csvfile)
+                writer.writerow(['Epoch', 'Train_Loss', 'Val_Loss', 'Train_Acc', 'Val_Acc', 'Learning_Rate', 'Epoch_Time'])
+                
+                for i in range(max_epochs):
+                    row = [i + 1]  # Epoch number (1-indexed)
+                    
+                    # Add metrics with safe indexing
+                    row.append(self.model.epoch_metrics['train_loss'][i] if i < len(self.model.epoch_metrics['train_loss']) else '')
+                    row.append(self.model.epoch_metrics['val_loss'][i] if i < len(self.model.epoch_metrics['val_loss']) else '')
+                    row.append(self.model.epoch_metrics['train_acc'][i] if i < len(self.model.epoch_metrics['train_acc']) else '')
+                    row.append(self.model.epoch_metrics['val_acc'][i] if i < len(self.model.epoch_metrics['val_acc']) else '')
+                    row.append(self.model.epoch_metrics['learning_rates'][i] if i < len(self.model.epoch_metrics['learning_rates']) else '')
+                    row.append(self.model.epoch_metrics['epoch_times'][i] if i < len(self.model.epoch_metrics['epoch_times']) else '')
+                    
+                    writer.writerow(row)
+                self.log_update_signal(f"✓ Metrics CSV saved: {csv_path}")
+            
+        except Exception as e:
+            self.log_update_signal(f"❌ Error saving CSV: {str(e)}")
+
+    def copy_confusion_matrices(self, results_folder):
+        """Copy confusion matrix files from results directory to training results folder"""
+        try:
+            import shutil
+            import glob
+            
+            # Look for confusion matrix files in the results directory
+            results_dir = "results"
+            if os.path.exists(results_dir):
+                cm_files = glob.glob(os.path.join(results_dir, "confusion_matrix_*.png"))
+                
+                if cm_files:
+                    cm_subfolder = os.path.join(results_folder, "confusion_matrices")
+                    os.makedirs(cm_subfolder, exist_ok=True)
+                    
+                    for cm_file in cm_files:
+                        filename = os.path.basename(cm_file)
+                        dest_path = os.path.join(cm_subfolder, filename)
+                        shutil.copy2(cm_file, dest_path)
+                        self.log_update_signal(f"✓ Confusion matrix copied: {filename}")
+                    
+                    # Clean up original files
+                    for cm_file in cm_files:
+                        try:
+                            os.remove(cm_file)
+                        except:
+                            pass  # Ignore cleanup errors
+                            
+                    self.log_update_signal(f"📊 {len(cm_files)} confusion matrices saved to results")
+                else:
+                    self.log_update_signal("ℹ No confusion matrices found to copy")
+            else:
+                self.log_update_signal("ℹ No results directory found for confusion matrices")
+                
+        except Exception as e:
+            self.log_update_signal(f"⚠ Error copying confusion matrices: {str(e)}")
+            if os.path.exists(results_dir):
+                cm_files = glob.glob(os.path.join(results_dir, "confusion_matrix_*.png"))
+                
+                if cm_files:
+                    cm_subfolder = os.path.join(results_folder, "confusion_matrices")
+                    os.makedirs(cm_subfolder, exist_ok=True)
+                    
+                    for cm_file in cm_files:
+                        filename = os.path.basename(cm_file)
+                        dest_path = os.path.join(cm_subfolder, filename)
+                        shutil.copy2(cm_file, dest_path)
+                        self.log_update_signal(f"✓ Confusion matrix copied: {filename}")
+                    
+                    # Clean up original files
+                    for cm_file in cm_files:
+                        try:
+                            os.remove(cm_file)
+                        except:
+                            pass  # Ignore cleanup errors
+                            
+                    self.log_update_signal(f"📊 {len(cm_files)} confusion matrices saved to results")
+                else:
+                    self.log_update_signal("ℹ No confusion matrices found to copy")
+            else:
+                self.log_update_signal("ℹ No results directory found for confusion matrices")
+                
+        except Exception as e:
+            self.log_update_signal(f"⚠ Error copying confusion matrices: {str(e)}")
+
+    def save_training_summary(self, results_folder, total_time):
+        """Save comprehensive training summary to text file"""
+        try:
+            summary_path = os.path.join(results_folder, "training_summary.txt")
+            
+            with open(summary_path, 'w') as f:
+                f.write("=" * 60 + "\n")
+                f.write("EEG CLASSIFICATION TRAINING SUMMARY\n")
+                f.write("=" * 60 + "\n\n")
+                
+                # Training configuration
+                f.write("TRAINING CONFIGURATION:\n")
+                f.write(f"  - Batch Size: {self.model.hparams.batch_size}\n")
+                f.write(f"  - Learning Rate: {self.model.hparams.lr}\n")
+                f.write(f"  - Max Epochs: {self.model.hparams.max_epoch}\n")
+                f.write(f"  - Total Training Time: {total_time:.2f} seconds ({total_time/60:.1f} minutes)\n\n")
+                
+                # Final metrics
+                if self.model.epoch_metrics['train_loss']:
+                    final_train_loss = self.model.epoch_metrics['train_loss'][-1]
+                    final_val_loss = self.model.epoch_metrics['val_loss'][-1] if self.model.epoch_metrics['val_loss'] else "N/A"
+                    final_train_acc = self.model.epoch_metrics['train_acc'][-1]
+                    final_val_acc = self.model.epoch_metrics['val_acc'][-1] if self.model.epoch_metrics['val_acc'] else "N/A"
+                    
+                    f.write("FINAL METRICS:\n")
+                    f.write(f"  - Final Train Loss: {final_train_loss:.6f}\n")
+                    f.write(f"  - Final Val Loss: {final_val_loss:.6f}\n" if isinstance(final_val_loss, float) else f"  - Final Val Loss: {final_val_loss}\n")
+                    f.write(f"  - Final Train Accuracy: {final_train_acc:.4f}\n")
+                    f.write(f"  - Final Val Accuracy: {final_val_acc:.4f}\n" if isinstance(final_val_acc, float) else f"  - Final Val Accuracy: {final_val_acc}\n")
+                    
+                    f.write(f"\nBEST METRICS:\n")
+                    f.write(f"  - Best Val Loss: {self.model.best_val_loss:.6f}\n")
+                    f.write(f"  - Best Val Accuracy: {self.model.best_val_acc:.4f}\n")
+                    
+                    f.write(f"\nTRAINING PROGRESS:\n")
+                    f.write(f"  - Total Epochs Completed: {len(self.model.epoch_metrics['train_loss'])}\n")
+                    if self.model.epoch_metrics['epoch_times']:
+                        avg_epoch_time = sum(self.model.epoch_metrics['epoch_times']) / len(self.model.epoch_metrics['epoch_times'])
+                        f.write(f"  - Average Epoch Time: {avg_epoch_time:.2f} seconds\n")
+                        
+                f.write("\n" + "=" * 60 + "\n")
+                
+            self.log_update_signal(f"✓ Training summary saved: {summary_path}")
+            
+        except Exception as e:
+            self.log_update_signal(f"❌ Error saving summary: {str(e)}")
             
     def load_model(self):
         """Load a saved model"""
