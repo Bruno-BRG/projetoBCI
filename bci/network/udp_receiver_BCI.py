@@ -224,3 +224,21 @@ if __name__ == "__main__":
         print("\nParando receptor...")
         receiver.stop()
         print("Receptor parado")
+
+
+    # Compatibilidade com código legado que espera a classe nomeada UDPReceiver
+    UDPReceiver = UDPReceiver_BCI
+
+    __all__ = [
+        'UDPReceiver_BCI',
+        'UDPReceiver'
+    ]
+
+# Módulo expõe nome compatível de forma global para evitar ImportError quando
+# importado como módulo em tempo de execução (não apenas executado como script).
+UDPReceiver = UDPReceiver_BCI
+
+__all__ = [
+    'UDPReceiver_BCI',
+    'UDPReceiver'
+]

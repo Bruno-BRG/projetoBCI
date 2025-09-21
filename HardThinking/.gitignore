@@ -1,0 +1,25 @@
+﻿venv/
+.venv/
+env/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.vscode/
+.idea/
+*.log
+# Virtual env and common build artifacts
+venv/
+.env
+__pycache__/
+*.py[cod]
+*.egg-info
+dist/
+build/
+*.so
+*.dll
+.vscode/

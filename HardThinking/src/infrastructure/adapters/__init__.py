@@ -1,0 +1,3 @@
+"""
+Adapters da arquitetura hexagonal
+"""

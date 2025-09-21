@@ -2,7 +2,6 @@ import time
 import socket
 import json
 import numpy as np
-import torch
 from collections import deque
 from PyQt5.QtCore import QThread, pyqtSignal
 from ..network.udp_receiver_BCI import UDPReceiver_BCI
@@ -31,8 +30,7 @@ class StreamingThread(QThread):
         
         # Inicialização do modelo
         self.model = None
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.window_size = 400  # 3.2s @ 125Hz
+        self.window_size = 250  # 3.2s @ 125Hz
         self.samples_since_last_prediction = 0
         self.predictions = deque(maxlen=50)  # Últimas predições
         self.eeg_buffer = deque(maxlen=1000)  # Buffer para dados EEG

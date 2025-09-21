@@ -13,9 +13,6 @@ FOLDERS = {
     'recordings': PROJECT_ROOT / 'data' / 'recordings',
     'database': PROJECT_ROOT / 'data' / 'database', 
     'models': PROJECT_ROOT / 'models',
-    'docs': PROJECT_ROOT / 'docs',
-    'tests': PROJECT_ROOT / 'tests',
-    'legacy': PROJECT_ROOT / 'legacy'
 }
 
 # Criar pastas se não existirem

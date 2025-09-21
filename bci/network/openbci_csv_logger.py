@@ -102,8 +102,8 @@ class OpenBCICSVLogger:
             # Verificar se devemos adicionar T0 automaticamente
             if self.last_marker in ['T1', 'T2']:
                 self.samples_since_marker += 1
-                # Após 400 amostras (~3.2s a 125Hz), adicionar T0 automaticamente
-                if self.samples_since_marker >= 400:
+                # Após 250 amostras (~3.2s a 125Hz), adicionar T0 automaticamente
+                if self.samples_since_marker >= 250:
                     current_marker = 'T0'
                     self.last_marker = 'T0'
                     self.samples_since_marker = 0

@@ -1,0 +1,3 @@
+"""
+Entidades do domínio
+"""
