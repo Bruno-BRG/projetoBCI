@@ -72,6 +72,7 @@ except Exception:
     TensorFlowMLAdapter = None
     print('Aviso: HardThinking TensorFlow adapter não encontrado. Funcionalidade de TF ficará indisponível.')
 from ..network.unity_communication import UDP_sender, UnityCommunicator
+from ..network.esp32_serial_communication import get_esp32_communicator
 from .training_dialog import TrainingDialog
 
 # Importar loggers
@@ -140,6 +141,11 @@ class StreamingWidget(QWidget):
         self.unity_communicator = UnityCommunicator()
         self.unity_communicator.set_message_callback(self._on_unity_message)
         self.unity_communicator.set_connection_callback(self._on_unity_connection)
+
+        # Inicializar comunicador ESP32
+        self.esp32_communicator = get_esp32_communicator()
+        self.esp32_communicator.set_connection_callback(self._on_esp32_connection)
+        self.esp32_connected = False
 
     # Contadores para marcadores
         self.t1_counter = 0
@@ -258,6 +264,55 @@ class StreamingWidget(QWidget):
         
         udp_group.setLayout(udp_layout)
         controls_layout.addWidget(udp_group)
+        
+        # Comunicação Serial ESP32
+        serial_group = QGroupBox("Comunicação Serial ESP32")
+        serial_layout = QVBoxLayout()
+        
+        # Primeira linha - status e controle da conexão
+        serial_row1 = QHBoxLayout()
+        
+        self.esp32_status_label = QLabel("ESP32: Desconectado")
+        self.esp32_status_label.setStyleSheet("color: red; font-weight: bold;")
+        
+        self.esp32_toggle_btn = QPushButton("Conectar ESP32")
+        self.esp32_toggle_btn.clicked.connect(self.toggle_esp32_connection)
+        self.esp32_toggle_btn.setStyleSheet("background-color: #9C27B0; color: white; font-weight: bold;")
+        
+        # Checkbox para habilitar/desabilitar envio serial
+        self.esp32_auto_send_checkbox = QCheckBox("Envio Serial Automático")
+        self.esp32_auto_send_checkbox.setChecked(False)  # Desabilitado por padrão
+        self.esp32_auto_send_checkbox.setToolTip("Quando marcado, envia comandos TRIGGER para ESP32 via serial (COM4)")
+        
+        serial_row1.addWidget(self.esp32_status_label)
+        serial_row1.addWidget(self.esp32_toggle_btn)
+        serial_row1.addWidget(self.esp32_auto_send_checkbox)
+        serial_row1.addStretch()
+        
+        # Segunda linha - testes manuais
+        serial_row2 = QHBoxLayout()
+        
+        serial_test_label = QLabel("Teste Manual:")
+        self.esp32_test_left_btn = QPushButton("🤚 Trigger Esquerdo")
+        self.esp32_test_left_btn.clicked.connect(lambda: self.manual_esp32_test('esquerda'))
+        self.esp32_test_left_btn.setStyleSheet("background-color: #2196F3; color: white; font-weight: bold;")
+        self.esp32_test_left_btn.setEnabled(False)
+        
+        self.esp32_test_right_btn = QPushButton("✋ Trigger Direito")
+        self.esp32_test_right_btn.clicked.connect(lambda: self.manual_esp32_test('direita'))
+        self.esp32_test_right_btn.setStyleSheet("background-color: #FF9800; color: white; font-weight: bold;")
+        self.esp32_test_right_btn.setEnabled(False)
+        
+        serial_row2.addWidget(serial_test_label)
+        serial_row2.addWidget(self.esp32_test_left_btn)
+        serial_row2.addWidget(self.esp32_test_right_btn)
+        serial_row2.addStretch()
+        
+        serial_layout.addLayout(serial_row1)
+        serial_layout.addLayout(serial_row2)
+        
+        serial_group.setLayout(serial_layout)
+        controls_layout.addWidget(serial_group)
         
         # Gravação
         recording_group = QGroupBox("Gravação")
@@ -525,6 +580,79 @@ class StreamingWidget(QWidget):
                 QMessageBox.information(self, "Sucesso", "Servidor UDP parado com sucesso!")
             except Exception as e:
                 QMessageBox.critical(self, "Erro", f"Erro ao parar servidor UDP: {e}")
+    
+    def manual_esp32_test(self, direction):
+        """Teste manual do envio serial para ESP32"""
+        if self.esp32_connected:
+            if direction == 'esquerda':
+                success = self.esp32_communicator.send_trigger_left()
+            else:
+                success = self.esp32_communicator.send_trigger_right()
+            
+            if success:
+                side_text = "esquerda" if direction == 'esquerda' else "direita"
+                QMessageBox.information(self, "Teste ESP32", f"Trigger enviado: Mão {side_text}")
+            else:
+                QMessageBox.critical(self, "Erro", "Falha ao enviar comando para ESP32!")
+        else:
+            QMessageBox.warning(self, "Aviso", "ESP32 não está conectado!")
+    
+    def send_esp32_signal(self, direction):
+        """Envia sinal serial para ESP32 se conectado e o envio automático estiver habilitado"""
+        if self.esp32_connected and self.esp32_auto_send_checkbox.isChecked():
+            if direction == 'esquerda':
+                success = self.esp32_communicator.send_trigger_left()
+            else:
+                success = self.esp32_communicator.send_trigger_right()
+            
+            if not success:
+                print(f"Falha ao enviar sinal serial para ESP32: {direction}")
+            return success
+        return False
+
+    def toggle_esp32_connection(self):
+        """Conecta ou desconecta do ESP32"""
+        try:
+            if not self.esp32_connected:
+                # Tentar conectar
+                connected = self.esp32_communicator.connect()
+                
+                if connected:
+                    self.esp32_connected = True
+                    self.esp32_status_label.setText("ESP32: Conectado (COM4)")
+                    self.esp32_status_label.setStyleSheet("color: green; font-weight: bold;")
+                    self.esp32_toggle_btn.setText("Desconectar ESP32")
+                    self.esp32_toggle_btn.setStyleSheet("background-color: #f44336; color: white; font-weight: bold;")
+                    self.esp32_test_left_btn.setEnabled(True)
+                    self.esp32_test_right_btn.setEnabled(True)
+                    QMessageBox.information(self, "Sucesso", "ESP32 conectado com sucesso na COM4!")
+                else:
+                    QMessageBox.critical(self, "Erro", "Falha ao conectar ESP32.\nVerifique se o ESP32 está conectado na COM4.")
+            else:
+                # Desconectar
+                self.esp32_communicator.disconnect()
+                self.esp32_connected = False
+                self.esp32_status_label.setText("ESP32: Desconectado")
+                self.esp32_status_label.setStyleSheet("color: red; font-weight: bold;")
+                self.esp32_toggle_btn.setText("Conectar ESP32")
+                self.esp32_toggle_btn.setStyleSheet("background-color: #9C27B0; color: white; font-weight: bold;")
+                self.esp32_test_left_btn.setEnabled(False)
+                self.esp32_test_right_btn.setEnabled(False)
+                QMessageBox.information(self, "Sucesso", "ESP32 desconectado com sucesso!")
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Erro", f"Erro ao conectar/desconectar ESP32: {e}")
+
+    def _on_esp32_connection(self, connected: bool):
+        """Callback para mudanças de conexão ESP32"""
+        self.esp32_connected = connected
+        if not connected and hasattr(self, 'esp32_status_label'):
+            self.esp32_status_label.setText("ESP32: Desconectado")
+            self.esp32_status_label.setStyleSheet("color: red; font-weight: bold;")
+            self.esp32_toggle_btn.setText("Conectar ESP32")
+            self.esp32_toggle_btn.setStyleSheet("background-color: #9C27B0; color: white; font-weight: bold;")
+            self.esp32_test_left_btn.setEnabled(False)
+            self.esp32_test_right_btn.setEnabled(False)
     
     def manual_udp_test(self, direction):
         """Teste manual do envio UDP"""
@@ -854,8 +982,13 @@ class StreamingWidget(QWidget):
                 
                 # Enviar trigger apenas nos modos Teste e Treino
                 current_task = self.task_combo.currentText()
-                if current_task in ["Teste", "Treino", "Jogo"] and self.udp_server_active:
-                    UDP_sender.enviar_sinal('trigger_left')  # Enviar sinal para ativar trigger esquerdo
+                if current_task in ["Teste", "Treino", "Jogo"]:
+                    # Enviar UDP se ativo
+                    if self.udp_server_active:
+                        UDP_sender.enviar_sinal('trigger_left')  # Enviar sinal para ativar trigger esquerdo
+                    
+                    # Enviar Serial se habilitado
+                    self.send_esp32_signal('esquerda')
                     
             elif marker_type == "T2":
                 self.t2_counter += 1
@@ -863,8 +996,13 @@ class StreamingWidget(QWidget):
                 
                 # Enviar trigger apenas nos modos Teste e Treino
                 current_task = self.task_combo.currentText()
-                if current_task in ["Teste", "Treino", "Jogo"] and self.udp_server_active:
-                    UDP_sender.enviar_sinal('trigger_right')  # Enviar sinal para ativar trigger direito
+                if current_task in ["Teste", "Treino", "Jogo"]:
+                    # Enviar UDP se ativo
+                    if self.udp_server_active:
+                        UDP_sender.enviar_sinal('trigger_right')  # Enviar sinal para ativar trigger direito
+                    
+                    # Enviar Serial se habilitado
+                    self.send_esp32_signal('direita')
 
             if USE_OPENBCI_LOGGER:
                 # Para o logger OpenBCI, verificar se baseline está ativo
@@ -1555,9 +1693,11 @@ class StreamingWidget(QWidget):
             if classes[pred] == '🤚 Mão Esquerda':
                 self.prob_left_label.setText(f"Mão Esquerda: {left_prob:.1%}")
                 self.send_udp_signal('esquerda')  # Enviar sinal UDP
+                self.send_esp32_signal('esquerda')  # Enviar sinal Serial ESP32
             else:
                 self.prob_right_label.setText(f"Mão Direita: {right_prob:.1%}")
                 self.send_udp_signal('direita')  # Enviar sinal UDP 
+                self.send_esp32_signal('direita')  # Enviar sinal Serial ESP32 
 
             # lock to prevent further predictions in this AI window until Unity replies
             try:

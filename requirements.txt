@@ -5,6 +5,9 @@ pandas>=2.0.3
 pyqtgraph>=0.12.4
 tensorflow>=2.13.0
 
+# Communication
+pyserial>=3.5
+
 # Data processing
 python-dateutil>=2.8.2
 scipy>=1.11.1
