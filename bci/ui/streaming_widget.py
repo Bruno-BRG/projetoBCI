@@ -366,20 +366,15 @@ class StreamingWidget(QWidget):
         buttons_row = QHBoxLayout()
         
         # Botões de marcadores
-        self.t1_btn = QPushButton("T1 - Movimento Real")
+        self.t1_btn = QPushButton("T1 - Mão Esquerda")
         self.t1_btn.setStyleSheet("background-color: #2196F3; color: white; font-weight: bold;")
         self.t1_btn.clicked.connect(lambda: self.add_marker("T1"))
         self.t1_btn.setEnabled(False)
         
-        self.t2_btn = QPushButton("T2 - Movimento Imaginado")
+        self.t2_btn = QPushButton("T2 - Mão Direita")
         self.t2_btn.setStyleSheet("background-color: #FF9800; color: white; font-weight: bold;")
         self.t2_btn.clicked.connect(lambda: self.add_marker("T2"))
         self.t2_btn.setEnabled(False)
-        
-        self.baseline_btn = QPushButton("Baseline")
-        self.baseline_btn.setStyleSheet("background-color: #9C27B0; color: white; font-weight: bold;")
-        self.baseline_btn.clicked.connect(self.start_baseline)
-        self.baseline_btn.setEnabled(False)
         
         # Timer para baseline
         self.baseline_timer = QTimer()
@@ -389,8 +384,7 @@ class StreamingWidget(QWidget):
         
         buttons_row.addWidget(self.t1_btn)
         buttons_row.addWidget(self.t2_btn)
-        buttons_row.addWidget(self.baseline_btn)
-        buttons_row.addWidget(self.baseline_label)
+        #buttons_row.addWidget(self.baseline_label)
         buttons_row.addStretch()
         
         # Segunda linha - contadores
