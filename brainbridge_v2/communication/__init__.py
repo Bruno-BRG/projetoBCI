@@ -1,0 +1,3 @@
+"""
+Módulo de comunicação externa
+"""

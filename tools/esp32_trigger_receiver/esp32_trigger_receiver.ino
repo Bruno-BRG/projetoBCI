@@ -4,7 +4,7 @@
  * RIGHT -> GPIO22
  */
 
-#define TRIGGER_LEFT_PIN   19   // <-- p   edido: LEFT no GPIO18
+#define TRIGGER_LEFT_PIN   19   // <-- p  edido: LEFT no GPIO18
 #define TRIGGER_RIGHT_PIN  22   // <-- pedido: RIGHT no GPIO22
 #define LED_PIN             2   // LED onboard (a maioria dos ESP32 usa GPIO2)
 

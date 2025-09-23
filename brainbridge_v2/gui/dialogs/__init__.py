@@ -1,0 +1,3 @@
+"""
+Diálogos da interface
+"""
