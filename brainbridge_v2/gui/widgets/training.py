@@ -5,7 +5,7 @@ Diálogo para confirmação e progresso do treino do modelo
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, 
                            QPushButton, QTextEdit, QProgressBar, QMessageBox)
 from PyQt5.QtCore import Qt, pyqtSignal
-from ..training.model_trainer import ModelTrainerThread
+from gui.training.model_trainer import ModelTrainerThread
 
 
 class TrainingDialog(QDialog):

@@ -1,4 +1,4 @@
-/*
+ /*
  * ESP32 — TRIGGERS via Serial
  * LEFT  -> GPIO18  (acende LED no 18)
  * RIGHT -> GPIO22

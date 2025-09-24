@@ -1,3 +1,0 @@
-"""
-Implementações de repositórios
-"""

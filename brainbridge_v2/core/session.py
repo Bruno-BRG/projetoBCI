@@ -6,8 +6,8 @@ from datetime import datetime
 from typing import Optional, Dict, Any, List
 from enum import Enum
 
-from .patient import Patient
-from .eeg_data import EEGSample, EEGSession
+from core.patient import Patient
+from core.eeg_data import EEGSample, EEGSession
 
 
 class SessionState(Enum):

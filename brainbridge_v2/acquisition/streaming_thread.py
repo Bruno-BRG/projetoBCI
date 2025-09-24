@@ -4,8 +4,8 @@ import json
 import numpy as np
 from collections import deque
 from PyQt5.QtCore import QThread, pyqtSignal
-from ..network.udp_receiver_BCI import UDPReceiver_BCI
-from ..signal_processing.butter_filter import ButterworthFilter
+from acquisition.udp_receiver import UDPReceiver_BCI
+from processing.butter_filter import ButterworthFilter
 
 class StreamingThread(QThread):
     """Thread para streaming de dados"""

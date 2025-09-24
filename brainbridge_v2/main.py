@@ -19,21 +19,25 @@ from pathlib import Path
 current_dir = Path(__file__).parent
 sys.path.insert(0, str(current_dir))
 
-# Verificar e importar dependências
+# 1) Inicializar TensorFlow primeiro (preferência do sistema)
+os.environ.setdefault('TF_CPP_MIN_LOG_LEVEL', '2')  # reduzir logs do TF
 try:
-    import numpy as np
-    import PyQt5
+    import tensorflow as tf  # noqa: F401
+    HAS_ML = True
+    # print("TensorFlow inicializado com sucesso")  # opcional
+except Exception as e:
+    # Captura falhas de DLL também e segue sem travar o app
+    print("Aviso: TensorFlow não encontrado ou falhou ao inicializar (DLL). Treinamento desativado.")
+    HAS_ML = False
+
+# 2) Verificar dependências de GUI depois do TF
+try:
+    import numpy as np  # noqa: F401
+    import PyQt5  # noqa: F401
     HAS_GUI = True
-except ImportError as e:
+except Exception as e:
     print(f"Aviso: Dependências da GUI não encontradas: {e}")
     HAS_GUI = False
-
-try:
-    import tensorflow as tf
-    HAS_ML = True
-except ImportError as e:
-    print(f"Aviso: TensorFlow não encontrado: {e}")
-    HAS_ML = False
 
 
 def run_gui():

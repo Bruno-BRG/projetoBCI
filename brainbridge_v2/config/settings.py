@@ -1,4 +1,30 @@
 """
+Configuração de caminhos para o sistema BrainBridge v2
+"""
+
+from pathlib import Path
+
+# Pasta raiz do projeto (pasta brainbridge_v2)
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+# Estrutura de pastas
+DATA_DIR = PROJECT_ROOT / 'data'
+RECORDINGS_DIR = DATA_DIR / 'recordings'
+DATABASE_DIR = DATA_DIR / 'database'
+MODELS_DIR = DATA_DIR / 'models'
+LOGS_DIR = DATA_DIR / 'logs'
+
+for d in (RECORDINGS_DIR, DATABASE_DIR, MODELS_DIR, LOGS_DIR):
+    d.mkdir(parents=True, exist_ok=True)
+
+DATABASE_PATH = DATABASE_DIR / 'bci_patients.db'
+
+def get_database_path():
+    return DATABASE_PATH
+
+def get_recording_path(filename: str) -> Path:
+    return RECORDINGS_DIR / filename
+"""
 Configuração de caminhos para o sistema BCI
 """
 

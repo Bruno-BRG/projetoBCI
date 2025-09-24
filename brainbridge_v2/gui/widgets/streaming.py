@@ -11,10 +11,10 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                            QMessageBox, QCheckBox,
                            QLineEdit, QSpinBox, QDialog, QInputDialog)
 from PyQt5.QtCore import QThread, pyqtSignal, QTimer, Qt
-from ..database.database_manager import DatabaseManager
-from ..streaming_logic.streaming_thread import StreamingThread
-from ..configs.config import get_recording_path
-from .EEG_plot_widget import EEGPlotWidget
+from database.manager import DatabaseManager
+from acquisition.streaming_thread import StreamingThread
+from config.settings import get_recording_path
+from gui.widgets.eeg_plot import EEGPlotWidget
  # Prefer using HardThinking TensorFlow adapter for models
 try:
     import importlib, sys
@@ -71,15 +71,15 @@ try:
 except Exception:
     TensorFlowMLAdapter = None
     print('Aviso: HardThinking TensorFlow adapter não encontrado. Funcionalidade de TF ficará indisponível.')
-from ..network.unity_communication import UDP_sender, UnityCommunicator
-from ..network.esp32_serial_communication import get_esp32_communicator
-from .training_dialog import TrainingDialog
+from communication.unity import UDP_sender, UnityCommunicator
+from communication.esp32 import get_esp32_communicator
+from gui.dialogs.training_dialog import TrainingDialog
 
-# Importar loggers
+# Importar logger do novo módulo (compatível com OpenBCI)
 try:
-    from ..network.openbci_csv_logger import OpenBCICSVLogger
+    from acquisition.data_logger import OpenBCICSVLogger
     USE_OPENBCI_LOGGER = True
-except ImportError:
+except Exception:
     USE_OPENBCI_LOGGER = False
 
 class StreamingWidget(QWidget):
@@ -789,7 +789,7 @@ class StreamingWidget(QWidget):
                 # Habilitar botões de marcadores
                 self.t1_btn.setEnabled(True)
                 self.t2_btn.setEnabled(True)
-                self.baseline_btn.setEnabled(True)
+                # self.baseline_btn.setEnabled(True)  # Botão removido
                 
                 # Resetar contadores
                 self.reset_action_counters()
@@ -849,7 +849,7 @@ class StreamingWidget(QWidget):
             # Desabilitar botões de marcadores
             self.t1_btn.setEnabled(False)
             self.t2_btn.setEnabled(False)
-            self.baseline_btn.setEnabled(False)
+            # self.baseline_btn.setEnabled(False)  # Botão removido
             
             # Parar timer de baseline se estiver rodando
             if self.baseline_timer.isActive():
@@ -1042,7 +1042,7 @@ class StreamingWidget(QWidget):
             # Desabilitar outros botões por 5 minutos
             self.t1_btn.setEnabled(False)
             self.t2_btn.setEnabled(False) 
-            self.baseline_btn.setEnabled(False)
+            # self.baseline_btn.setEnabled(False)  # Botão removido
             
             # Feedback visual
             task_name = "jogo" if self.task_combo.currentText() == "Jogo" else "gravação"
@@ -1059,7 +1059,7 @@ class StreamingWidget(QWidget):
                 self.baseline_timer.stop()
                 self.t1_btn.setEnabled(True)
                 self.t2_btn.setEnabled(True)
-                self.baseline_btn.setEnabled(True)
+                # self.baseline_btn.setEnabled(True)  # Botão removido
                 
                 task_name = "jogo" if self.task_combo.currentText() == "Jogo" else "gravação"
                 status_text = "Jogando" if task_name == "jogo" else "Gravando"
@@ -1080,7 +1080,7 @@ class StreamingWidget(QWidget):
                     self.baseline_timer.stop()
                     self.t1_btn.setEnabled(True)
                     self.t2_btn.setEnabled(True)
-                    self.baseline_btn.setEnabled(True)
+                    # self.baseline_btn.setEnabled(True)  # Botão removido
                     self.recording_label.setText("Gravando - Baseline finalizado")
                 else:
                     minutes = self.baseline_time_remaining // 60
@@ -1100,7 +1100,7 @@ class StreamingWidget(QWidget):
             if self.is_recording:
                 self.t1_btn.setEnabled(True)
                 self.t2_btn.setEnabled(True)
-                self.baseline_btn.setEnabled(True)
+                # self.baseline_btn.setEnabled(True)  # Botão removido
                 self.recording_label.setText("Gravando - Baseline finalizado")
                 
                 # Resetar texto após 3 segundos

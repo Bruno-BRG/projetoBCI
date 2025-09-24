@@ -14,8 +14,8 @@ import json
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 import logging
-from .udp_receiver_BCI import UDPReceiver
-from ..signal_processing.butter_filter import ButterworthFilter
+from acquisition.udp_receiver import UDPReceiver
+from processing.butter_filter import ButterworthFilter
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
