@@ -172,6 +172,11 @@ class StreamingWidget(QWidget):
         self.accuracy_correct = 0
         self.accuracy_total = 0
 
+    # Controle de balanceamento para tarefas aleatórias
+        self.random_t1_sent = 0  # Contador de T1 enviados
+        self.random_t2_sent = 0  # Contador de T2 enviados
+        self.use_balanced_selection = True  # Flag para habilitar seleção balanceada
+
     # UDP receiver para acurácia (recebe mensagens do sistema externo)
         self.accuracy_udp_receiver = None
         self.accuracy_thread = None
@@ -552,7 +557,7 @@ class StreamingWidget(QWidget):
                     self.udp_test_left_btn.setEnabled(True)
                     self.udp_test_right_btn.setEnabled(True)
                     
-                    QMessageBox.information(self, "Sucesso", "Servidor UDP iniciado com sucesso!\nBroadcast do IP enviado automaticamente.")
+                    # Pop-up removido - status já é mostrado na label
                 else:
                     QMessageBox.critical(self, "Erro", "Falha ao iniciar servidor UDP")
             except Exception as e:
@@ -571,7 +576,7 @@ class StreamingWidget(QWidget):
                 self.udp_test_left_btn.setEnabled(False)
                 self.udp_test_right_btn.setEnabled(False)
                 
-                QMessageBox.information(self, "Sucesso", "Servidor UDP parado com sucesso!")
+                # Pop-up removido - status já é mostrado na label
             except Exception as e:
                 QMessageBox.critical(self, "Erro", f"Erro ao parar servidor UDP: {e}")
     
@@ -585,7 +590,14 @@ class StreamingWidget(QWidget):
             
             if success:
                 side_text = "esquerda" if direction == 'esquerda' else "direita"
-                QMessageBox.information(self, "Teste ESP32", f"Trigger enviado: Mão {side_text}")
+                # Pop-up removido - apenas atualizar status na barra se disponível
+                try:
+                    main_window = self.parent().parent()
+                    if hasattr(main_window, 'statusBar'):
+                        main_window.statusBar().showMessage(f"Trigger enviado: Mão {side_text}", 2000)
+                except:
+                    # Se não conseguir acessar a barra de status, apenas ignora
+                    pass
             else:
                 QMessageBox.critical(self, "Erro", "Falha ao enviar comando para ESP32!")
         else:
@@ -619,7 +631,7 @@ class StreamingWidget(QWidget):
                     self.esp32_toggle_btn.setStyleSheet("background-color: #f44336; color: white; font-weight: bold;")
                     self.esp32_test_left_btn.setEnabled(True)
                     self.esp32_test_right_btn.setEnabled(True)
-                    QMessageBox.information(self, "Sucesso", "ESP32 conectado com sucesso na COM4!")
+                    # Pop-up removido - status já é mostrado na label
                 else:
                     QMessageBox.critical(self, "Erro", "Falha ao conectar ESP32.\nVerifique se o ESP32 está conectado na COM4.")
             else:
@@ -632,7 +644,7 @@ class StreamingWidget(QWidget):
                 self.esp32_toggle_btn.setStyleSheet("background-color: #9C27B0; color: white; font-weight: bold;")
                 self.esp32_test_left_btn.setEnabled(False)
                 self.esp32_test_right_btn.setEnabled(False)
-                QMessageBox.information(self, "Sucesso", "ESP32 desconectado com sucesso!")
+                # Pop-up removido - status já é mostrado na label
                 
         except Exception as e:
             QMessageBox.critical(self, "Erro", f"Erro ao conectar/desconectar ESP32: {e}")
@@ -654,7 +666,14 @@ class StreamingWidget(QWidget):
             success = UDP_sender.enviar_sinal(direction)
             if success:
                 side_text = "esquerda" if direction == 'esquerda' else "direita"
-                QMessageBox.information(self, "Teste UDP", f"Sinal enviado: Mão {side_text}")
+                # Pop-up removido - apenas atualizar status na barra se disponível
+                try:
+                    main_window = self.parent().parent()
+                    if hasattr(main_window, 'statusBar'):
+                        main_window.statusBar().showMessage(f"Sinal UDP enviado: Mão {side_text}", 2000)
+                except:
+                    # Se não conseguir acessar a barra de status, apenas ignora
+                    pass
             else:
                 QMessageBox.critical(self, "Erro", "Falha ao enviar sinal UDP!")
         else:
@@ -688,7 +707,7 @@ class StreamingWidget(QWidget):
                     self.udp_toggle_btn.setStyleSheet("background-color: #f44336; color: white; font-weight: bold;")
                     self.udp_test_left_btn.setEnabled(True)
                     self.udp_test_right_btn.setEnabled(True)
-                    QMessageBox.information(self, "Sucesso", "Servidor UDP iniciado com sucesso!\nBroadcast do IP enviado automaticamente.")
+                    # Pop-up removido - status já é mostrado na label
                 else:
                     QMessageBox.critical(self, "Erro", "Falha ao iniciar servidor UDP")
             else:
@@ -789,7 +808,6 @@ class StreamingWidget(QWidget):
                 # Habilitar botões de marcadores
                 self.t1_btn.setEnabled(True)
                 self.t2_btn.setEnabled(True)
-                self.baseline_btn.setEnabled(True)
                 
                 # Resetar contadores
                 self.reset_action_counters()
@@ -849,7 +867,6 @@ class StreamingWidget(QWidget):
             # Desabilitar botões de marcadores
             self.t1_btn.setEnabled(False)
             self.t2_btn.setEnabled(False)
-            self.baseline_btn.setEnabled(False)
             
             # Parar timer de baseline se estiver rodando
             if self.baseline_timer.isActive():
@@ -894,6 +911,34 @@ class StreamingWidget(QWidget):
             else:
                 QMessageBox.information(self, "Sucesso", "Gravação finalizada!")
     
+    def get_balanced_random_action(self):
+        """Retorna uma ação aleatória balanceada (T1 ou T2) para evitar bias"""
+        if not self.use_balanced_selection:
+            # Usar seleção completamente aleatória se desabilitado
+            import random
+            return random.choice(['T1', 'T2'])
+        
+        # Lógica balanceada: priorizar a ação menos enviada
+        if self.random_t1_sent < self.random_t2_sent:
+            # T1 foi enviado menos, priorizá-lo
+            action = 'T1'
+        elif self.random_t2_sent < self.random_t1_sent:
+            # T2 foi enviado menos, priorizá-lo
+            action = 'T2'
+        else:
+            # Empate: usar seleção aleatória
+            import random
+            action = random.choice(['T1', 'T2'])
+        
+        # Atualizar contadores
+        if action == 'T1':
+            self.random_t1_sent += 1
+            print(f"🎯 Selecionado T1 (esquerda) - Balance: T1={self.random_t1_sent}, T2={self.random_t2_sent}")
+        else:
+            self.random_t2_sent += 1
+            print(f"🎯 Selecionado T2 (direita) - Balance: T1={self.random_t1_sent}, T2={self.random_t2_sent}")
+            
+        return action
 
     def game_random_action(self):
         """Executa uma ação aleatória no jogo (fallback caso não receba resposta)"""
@@ -905,9 +950,8 @@ class StreamingWidget(QWidget):
                 self.waiting_for_response = False
                 self.response_received = False
                 
-            import random
-            actions = ['T1', 'T2'] #T1 para movimento esquerda, T2 para movimento direita
-            action = random.choice(actions)
+            # Usar seleção balanceada ao invés de random.choice puro
+            action = self.get_balanced_random_action()
             
             # Marcar que está aguardando resposta
             self.waiting_for_response = True
@@ -933,9 +977,8 @@ class StreamingWidget(QWidget):
         """Envia o próximo sinal aleatório após receber resposta"""
         if self.is_recording and self.csv_logger:
             print("🎲 Enviando próximo sinal aleatório")
-            import random
-            actions = ['T1', 'T2'] #T1 para movimento esquerda, T2 para movimento direita
-            action = random.choice(actions)
+            # Usar seleção balanceada ao invés de random.choice puro
+            action = self.get_balanced_random_action()
             
             # Marcar que está aguardando resposta
             self.waiting_for_response = True
@@ -1002,8 +1045,12 @@ class StreamingWidget(QWidget):
                 # Para o logger OpenBCI, verificar se baseline está ativo
                 if hasattr(self.csv_logger, 'is_baseline_active'):
                     if self.csv_logger.is_baseline_active():
-                        QMessageBox.warning(self, "Baseline Ativo", 
-                                          "Não é possível adicionar marcadores durante o baseline")
+                        # Pop-up removido - apenas atualizar status na label
+                        task_name = "jogo" if self.task_combo.currentText() == "Jogo" else "gravação"
+                        status_text = "Jogando" if task_name == "jogo" else "Gravando"
+                        self.recording_label.setText(f"{status_text} - Baseline ativo: não é possível adicionar marcadores")
+                        # Resetar mensagem após 3 segundos
+                        QTimer.singleShot(3000, self.reset_recording_label)
                         return
                 # Marcar para adicionar na próxima amostra
                 self.pending_marker = marker_type
@@ -1059,8 +1106,7 @@ class StreamingWidget(QWidget):
                 self.baseline_timer.stop()
                 self.t1_btn.setEnabled(True)
                 self.t2_btn.setEnabled(True)
-                self.baseline_btn.setEnabled(True)
-                
+
                 task_name = "jogo" if self.task_combo.currentText() == "Jogo" else "gravação"
                 status_text = "Jogando" if task_name == "jogo" else "Gravando"
                 self.recording_label.setText(f"{status_text} - Baseline finalizado")
@@ -1080,7 +1126,6 @@ class StreamingWidget(QWidget):
                     self.baseline_timer.stop()
                     self.t1_btn.setEnabled(True)
                     self.t2_btn.setEnabled(True)
-                    self.baseline_btn.setEnabled(True)
                     self.recording_label.setText("Gravando - Baseline finalizado")
                 else:
                     minutes = self.baseline_time_remaining // 60
@@ -1100,7 +1145,6 @@ class StreamingWidget(QWidget):
             if self.is_recording:
                 self.t1_btn.setEnabled(True)
                 self.t2_btn.setEnabled(True)
-                self.baseline_btn.setEnabled(True)
                 self.recording_label.setText("Gravando - Baseline finalizado")
                 
                 # Resetar texto após 3 segundos
@@ -1568,7 +1612,11 @@ class StreamingWidget(QWidget):
         self.t2_counter = 0
         self.t1_counter_label.setText("T1: 0")
         self.t2_counter_label.setText("T2: 0")
-        print("🔄 Contadores de ações resetados")
+        
+        # Resetar também os contadores de balanceamento para tarefas aleatórias
+        self.random_t1_sent = 0
+        self.random_t2_sent = 0
+        print("🔄 Contadores de ações resetados (incluindo balanceamento aleatório)")
         
     def start_accuracy_udp_receiver(self):
         """

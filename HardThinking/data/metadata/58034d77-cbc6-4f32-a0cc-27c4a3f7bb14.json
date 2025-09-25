@@ -1,0 +1,25 @@
+{
+  "id": "58034d77-cbc6-4f32-a0cc-27c4a3f7bb14",
+  "name": "model_single_subject_1_subjects",
+  "architecture": "CNN_1D",
+  "status": "error",
+  "file_path": null,
+  "subject_ids": [
+    "S002"
+  ],
+  "training_metrics": null,
+  "hyperparameters": {
+    "input_shape": [
+      250,
+      16
+    ],
+    "num_classes": 2
+  },
+  "metadata": {
+    "training_strategy": "single_subject",
+    "error": "Erro durante treinamento: The least populated class in y has only 1 member, which is too few. The minimum number of groups for any class cannot be less than 2."
+  },
+  "created_at": "2025-09-24T15:12:32.091322",
+  "updated_at": "2025-09-24T15:12:32.709897",
+  "trained_at": null
+}

@@ -15,7 +15,7 @@ class ESP32SerialCommunicator:
     Envia comandos TRIGGER_LEFT e TRIGGER_RIGHT para ESP32 na COM4
     """
     
-    def __init__(self, port: str = "COM4", baudrate: int = 115200, timeout: float = 1.0):
+    def __init__(self, port: str = "COM3", baudrate: int = 115200, timeout: float = 1.0):
         """
         Inicializa o comunicador serial
         
@@ -155,9 +155,9 @@ class ESP32SerialCommunicator:
             bool: True se enviado com sucesso
         """
         if hand.lower() in ['direita', 'right']:
-            return self._send_raw_command("TRIGGER_RIGHT")
+            return self._send_raw_command("RIGHT_HAND_CLOSE")
         elif hand.lower() in ['esquerda', 'left']:
-            return self._send_raw_command("TRIGGER_LEFT")
+            return self._send_raw_command("LEFT_HAND_CLOSE")
         else:
             self.logger.error(f"Comando de trigger inválido: {hand}")
             return False

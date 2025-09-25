@@ -4,12 +4,12 @@
  * RIGHT -> GPIO22
  */
 
-#define TRIGGER_LEFT_PIN   19   // <-- p   edido: LEFT no GPIO18
-#define TRIGGER_RIGHT_PIN  22   // <-- pedido: RIGHT no GPIO22
+#define TRIGGER_LEFT_PIN   22   // <-- p   edido: LEFT no GPIO22
+#define TRIGGER_RIGHT_PIN  19   // <-- pedido: RIGHT no GPIO19
 #define LED_PIN             2   // LED onboard (a maioria dos ESP32 usa GPIO2)
 
 #define BAUD_RATE          115200
-#define TRIGGER_DURATION   100   // ms
+#define TRIGGER_DURATION   3000  // ms
 
 void setup() {
   Serial.begin(BAUD_RATE);
@@ -25,8 +25,8 @@ void setup() {
   Serial.println("ESP32 BCI Trigger System");
   Serial.println("========================");
   Serial.println("Comandos:");
-  Serial.println("- TRIGGER_LEFT  | LEFT  | L");
-  Serial.println("- TRIGGER_RIGHT | RIGHT | R");
+  Serial.println("LEFT_HAND_CLOSE");
+  Serial.println("RIGHT_HAND_CLOSE");
   Serial.println("- PING");
   Serial.println("Use newline (\\n) no final do comando.");
   blinkBoot();
@@ -57,10 +57,10 @@ void processCommand(String command) {
   Serial.print("Comando recebido: ");
   Serial.println(command);
 
-  if (command == "TRIGGER_LEFT" || command == "LEFT" || command == "L") {
+  if (command == "LEFT_HAND_CLOSE") {
     executeTriggerLeft();
   }
-  else if (command == "TRIGGER_RIGHT" || command == "RIGHT" || command == "R") {
+  else if (command == "RIGHT_HAND_CLOSE") {
     executeTriggerRight();
   }
   else if (command == "PING") {
@@ -73,7 +73,7 @@ void processCommand(String command) {
 }
 
 void executeTriggerLeft() {
-  Serial.println("Executando TRIGGER_LEFT (GPIO19)");
+  Serial.println("Executando TRIGGER_LEFT (GPIO22)");
   digitalWrite(TRIGGER_LEFT_PIN, HIGH);
   digitalWrite(LED_PIN, HIGH);
   delay(TRIGGER_DURATION);
@@ -83,7 +83,7 @@ void executeTriggerLeft() {
 }
 
 void executeTriggerRight() {
-  Serial.println("Executando TRIGGER_RIGHT (GPIO22)");
+  Serial.println("Executando TRIGGER_RIGHT (GPIO19)");
   digitalWrite(TRIGGER_RIGHT_PIN, HIGH);
   digitalWrite(LED_PIN, HIGH);
   delay(TRIGGER_DURATION);
