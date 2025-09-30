@@ -1942,7 +1942,7 @@ class StreamingWidget(QWidget):
         """Mostra o diálogo de confirmação e execução do treino"""
         try:
             # New API: auto_start to run training immediately and auto-load model when ready
-            dialog = TrainingDialog(csv_file_path, patient_id, patient_name, self)
+            dialog = TrainingDialog(csv_file_path, patient_id, patient_name, self.db_manager, self)
             # Propagar preferência para auto-start
             dialog.auto_start = auto_start
             # Conectar sinal de modelo pronto para carregar automaticamente

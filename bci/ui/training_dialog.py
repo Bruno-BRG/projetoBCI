@@ -11,11 +11,12 @@ from ..training.model_trainer import ModelTrainerThread
 class TrainingDialog(QDialog):
     """Diálogo para confirmar e acompanhar o treino do modelo"""
     
-    def __init__(self, csv_file_path, patient_id, patient_name, parent=None):
+    def __init__(self, csv_file_path, patient_id, patient_name, db_manager=None, parent=None):
         super().__init__(parent)
         self.csv_file_path = csv_file_path
         self.patient_id = patient_id
         self.patient_name = patient_name
+        self.db_manager = db_manager
         self.trainer_thread = None
         
         self.setWindowTitle("Treinar Modelo EEG")
@@ -109,7 +110,7 @@ class TrainingDialog(QDialog):
         self.resize(500, 500)
         
         # Cria e inicia thread de treinamento
-        self.trainer_thread = ModelTrainerThread(self.csv_file_path, self.patient_id)
+        self.trainer_thread = ModelTrainerThread(self.csv_file_path, self.patient_id, self.db_manager)
         self.trainer_thread.progress_signal.connect(self.update_progress)
         self.trainer_thread.finished_signal.connect(self.training_finished)
         # Conectar sinal que informa o caminho do modelo gerado

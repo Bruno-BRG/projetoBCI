@@ -16,10 +16,11 @@ class ModelTrainerThread(QThread):
     # Emite o caminho do modelo gerado quando disponível
     model_path_signal = pyqtSignal(str)
 
-    def __init__(self, csv_file_path: str, patient_id: int, parent=None):
+    def __init__(self, csv_file_path: str, patient_id: int, db_manager=None, parent=None):
         super().__init__(parent)
         self.csv_file_path = csv_file_path
         self.patient_id = patient_id
+        self.db_manager = db_manager
 
     def run(self):
         try:
@@ -108,26 +109,129 @@ class ModelTrainerThread(QThread):
                 self.finished_signal.emit(False, f"Falha ao importar módulos do HardThinking. Ver log: {log_file}" if log_file else msg)
                 return
 
-            # Copiar CSV de gravação para pasta de dados do HardThinking
+            # Copiar TODAS as gravações do paciente para pasta de dados do HardThinking
             config = get_config()
             data_dir = Path(config.directories.data_dir)
             subjects_dir = data_dir / f"S{self.patient_id:03d}"
             subjects_dir.mkdir(parents=True, exist_ok=True)
 
-            dest_csv = subjects_dir / Path(self.csv_file_path).name
-            self.progress_signal.emit(f"Copiando arquivo CSV para {dest_csv}...")
-            try:
-                shutil.copy2(self.csv_file_path, dest_csv)
-                if logger:
-                    logger.info(f"CSV copiado para {dest_csv}")
-            except Exception as e:
-                tb = traceback.format_exc()
-                msg = f"Falha ao copiar CSV para HardThinking: {e}\n{tb}"
-                if logger:
-                    logger.error(msg)
-                self.progress_signal.emit("Erro ao preparar dados para treinamento. Ver log para detalhes.")
-                self.finished_signal.emit(False, f"Falha ao copiar CSV. Ver log: {log_file}" if log_file else msg)
-                return
+            # Buscar todas as gravações do paciente no banco de dados
+            all_recordings = []
+            if self.db_manager:
+                try:
+                    all_recordings = self.db_manager.get_patient_recordings(self.patient_id)
+                    self.progress_signal.emit(f"Encontradas {len(all_recordings)} gravações para o paciente {self.patient_id}")
+                except Exception as e:
+                    if logger:
+                        logger.warning(f"Erro ao buscar gravações do banco: {e}")
+                    # Fallback: usar apenas a gravação atual
+                    all_recordings = []
+
+            # Se não conseguiu buscar do banco ou não há db_manager, usar apenas a gravação atual
+            if not all_recordings:
+                self.progress_signal.emit("Usando apenas a gravação atual...")
+                dest_csv = subjects_dir / Path(self.csv_file_path).name
+                try:
+                    shutil.copy2(self.csv_file_path, dest_csv)
+                    if logger:
+                        logger.info(f"CSV atual copiado para {dest_csv}")
+                except Exception as e:
+                    tb = traceback.format_exc()
+                    msg = f"Falha ao copiar CSV atual para HardThinking: {e}\n{tb}"
+                    if logger:
+                        logger.error(msg)
+                    self.progress_signal.emit("Erro ao preparar dados para treinamento. Ver log para detalhes.")
+                    self.finished_signal.emit(False, f"Falha ao copiar CSV. Ver log: {log_file}" if log_file else msg)
+                    return
+            else:
+                # Copiar todas as gravações do paciente
+                copied_count = 0
+                for recording in all_recordings:
+                    # Construir caminho do arquivo baseado no filename do banco
+                    recording_filename = recording['filename']
+                    
+                    # Tentar localizar o arquivo de gravação
+                    recording_path = None
+                    
+                    # Primeira tentativa: caminho absoluto
+                    if os.path.isabs(recording_filename) and os.path.exists(recording_filename):
+                        recording_path = recording_filename
+                    else:
+                        # Buscar nas possíveis localizações
+                        base_data_dir = Path(__file__).parent.parent / 'data'
+                        
+                        # O filename pode ter diferentes formatos dependendo de como foi salvo
+                        # Vamos tentar várias possibilidades
+                        patient_name_patterns = [
+                            f"P{self.patient_id:03d}_*",  # P002_Nome
+                            f"P{self.patient_id}_*",     # P2_Nome  
+                            f"{self.patient_id}_*"       # 2_Nome
+                        ]
+                        
+                        possible_paths = []
+                        
+                        # Buscar em todas as pastas de paciente que podem corresponder
+                        for pattern in patient_name_patterns:
+                            for patient_folder in base_data_dir.glob(pattern):
+                                if patient_folder.is_dir():
+                                    # Tentar diferentes combinações de nomes de arquivo
+                                    possible_paths.extend([
+                                        patient_folder / recording_filename,
+                                        patient_folder / Path(recording_filename).name,
+                                    ])
+                        
+                        # Outras localizações possíveis
+                        possible_paths.extend([
+                            base_data_dir / recording_filename,
+                            base_data_dir / 'recordings' / recording_filename,
+                            base_data_dir / Path(recording_filename).name,
+                            Path(recording_filename)
+                        ])
+                        
+                        # Procurar o arquivo
+                        for path in possible_paths:
+                            if path.exists() and path.is_file():
+                                recording_path = str(path)
+                                break
+                    
+                    if recording_path:
+                        dest_csv = subjects_dir / Path(recording_path).name
+                        try:
+                            shutil.copy2(recording_path, dest_csv)
+                            copied_count += 1
+                            if logger:
+                                logger.info(f"Gravação copiada: {recording_path} -> {dest_csv}")
+                        except Exception as e:
+                            if logger:
+                                logger.warning(f"Erro ao copiar gravação {recording_path}: {e}")
+                    else:
+                        if logger:
+                            logger.warning(f"Gravação não encontrada: {recording_filename}")
+                            # Log das localizações tentadas para debug
+                            logger.debug(f"Localizações tentadas para {recording_filename}:")
+                            for path in possible_paths:
+                                logger.debug(f"  - {path} (exists: {path.exists() if hasattr(path, 'exists') else False})")
+                
+                if copied_count > 0:
+                    self.progress_signal.emit(f"Copiadas {copied_count} gravações para treinamento")
+                    if logger:
+                        logger.info(f"Total de {copied_count} gravações copiadas para {subjects_dir}")
+                else:
+                    # Se não conseguiu copiar nenhuma gravação, usar a atual como fallback
+                    self.progress_signal.emit("Nenhuma gravação histórica encontrada, usando apenas a atual...")
+                    dest_csv = subjects_dir / Path(self.csv_file_path).name
+                    try:
+                        shutil.copy2(self.csv_file_path, dest_csv)
+                        if logger:
+                            logger.info(f"CSV atual copiado como fallback para {dest_csv}")
+                    except Exception as e:
+                        tb = traceback.format_exc()
+                        msg = f"Falha ao copiar CSV de fallback para HardThinking: {e}\n{tb}"
+                        if logger:
+                            logger.error(msg)
+                        self.progress_signal.emit("Erro ao preparar dados para treinamento. Ver log para detalhes.")
+                        self.finished_signal.emit(False, f"Falha ao copiar CSV. Ver log: {log_file}" if log_file else msg)
+                        return
 
             # Preparar request simples para treinar com este sujeito (single_subject)
             request = TrainModelRequest(
