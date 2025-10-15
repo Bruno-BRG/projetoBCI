@@ -7,13 +7,13 @@ Reorganização do sistema BrainBridge com estrutura mais limpa e separação cl
 
 ```
 BrainBridge/
-├── main.py                    # Ponto de entrada principal único
+├── main.py                  # Ponto de entrada principal único
 ├── config/
 │   ├── __init__.py
-│   ├── settings.py           # Configurações centralizadas
-│   └── constants.py          # Constantes do sistema
+│   ├── settings.py          # Configurações centralizadas
+│   └── constants.py         # Constantes do sistema
 │
-├── core/                     # Núcleo do sistema
+├── core/                    # Núcleo do sistema
 │   ├── __init__.py
 │   ├── eeg_data.py          # Classes para dados EEG
 │   ├── patient.py           # Gestão de pacientes
