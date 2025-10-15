@@ -81,6 +81,21 @@ def reorganizar_dataset_completo(diretorio_eeg_data):
     arquivos_processados = 0
     arquivos_com_erro = 0
     
+    # Primeiro, processar arquivos CSV diretamente na pasta raiz
+    print(f"\nProcessando pasta raiz: {diretorio_eeg_data}")
+    for arquivo in os.listdir(diretorio_eeg_data):
+        if arquivo.endswith('_csv_openbci.csv') or arquivo.endswith('.csv'):
+            caminho_arquivo = os.path.join(diretorio_eeg_data, arquivo)
+            
+            # Verificar se é um arquivo (não diretório)
+            if os.path.isfile(caminho_arquivo):
+                try:
+                    reorganizar_canais_csv(caminho_arquivo)
+                    arquivos_processados += 1
+                except Exception as e:
+                    print(f"✗ Erro ao processar {arquivo}: {e}")
+                    arquivos_com_erro += 1
+    
     # Percorrer todas as pastas de sujeitos
     for pasta_sujeito in os.listdir(diretorio_eeg_data):
         caminho_pasta = os.path.join(diretorio_eeg_data, pasta_sujeito)
@@ -90,7 +105,7 @@ def reorganizar_dataset_completo(diretorio_eeg_data):
             
             # Percorrer todos os arquivos CSV na pasta do sujeito
             for arquivo in os.listdir(caminho_pasta):
-                if arquivo.endswith('_csv_openbci.csv'):
+                if arquivo.endswith('_csv_openbci.csv') or arquivo.endswith('.csv'):
                     caminho_arquivo = os.path.join(caminho_pasta, arquivo)
                     
                     try:
@@ -130,7 +145,7 @@ def verificar_reorganizacao(arquivo_csv):
 
 if __name__ == "__main__":
     # Diretório do dataset EEG
-    diretorio_eeg = r"c:\Users\Chari\Documents\CIMATEC\BrainBridge\bci\eeg_data"
+    diretorio_eeg = r"/home/apolo/dev/BrainBridge/tools"
     
     # Verificar se o diretório existe
     if not os.path.exists(diretorio_eeg):
