@@ -59,7 +59,7 @@ def exemplo_sessao_completa():
     # 5. Configurar dados do paciente
     patient = PatientData(
         nome="João Silva",
-        nivel="Intermediário",
+        nivel=5,  # Nível de 0 a 11
         lado="Direito"
     )
     
@@ -154,7 +154,17 @@ def exemplo_sessao_interativa():
     # Coletar dados do paciente
     print("\n📋 Configuração da Sessão:")
     nome = input("Nome do paciente: ").strip() or "Paciente Teste"
-    nivel = input("Nível (Iniciante/Intermediário/Avançado): ").strip() or "Intermediário"
+    
+    nivel_input = input("Nível (0-11): ").strip() or "5"
+    try:
+        nivel = int(nivel_input)
+        if not (0 <= nivel <= 11):
+            print("⚠️  Nível fora do range, usando 5")
+            nivel = 5
+    except ValueError:
+        print("⚠️  Nível inválido, usando 5")
+        nivel = 5
+    
     lado = input("Lado afetado (Esquerdo/Direito): ").strip() or "Direito"
     tarefa = input("Tarefa (Treino/Jogo): ").strip() or "Treino"
     

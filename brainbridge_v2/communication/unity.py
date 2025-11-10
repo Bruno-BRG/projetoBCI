@@ -43,8 +43,16 @@ class EndTaskCommand(Enum):
 class PatientData:
     """Dados do paciente conforme protocolo"""
     nome: str
-    nivel: str
-    lado: str  # "Esquerdo" ou "Direito"
+    nivel: int  # Nível de 0 a 11
+    lado: str   # "Esquerdo" ou "Direito"
+    
+    def __post_init__(self):
+        """Valida os dados após inicialização"""
+        if not isinstance(self.nivel, int) or not (0 <= self.nivel <= 11):
+            raise ValueError(f"Nível deve ser um número inteiro entre 0 e 11. Recebido: {self.nivel}")
+        
+        if self.lado not in ["Esquerdo", "Direito"]:
+            raise ValueError(f"Lado deve ser 'Esquerdo' ou 'Direito'. Recebido: {self.lado}")
     
     def format_message(self) -> str:
         """Formata mensagem de dados do paciente conforme protocolo"""
@@ -369,6 +377,7 @@ class UnityCommunicator:
         Finaliza a sessão atual enviando comando de finalização
         Args:
             message: Mensagem opcional para enviar junto com a finalização
+                    Se None, usa mensagem padrão de encorajamento
         """
         if not self.session.is_active:
             print("❌ Erro: Nenhuma sessão ativa para finalizar")
@@ -389,11 +398,13 @@ class UnityCommunicator:
             print("❌ Erro: Tipo de tarefa desconhecido")
             return False
         
+        # Usar mensagem padrão se nenhuma for fornecida
+        if message is None:
+            message = "Parabens voce esta mandando muito bem"
+        
         # Enviar comando de finalização
         print(f"\n📤 Enviando comando de finalização: {task_name}")
-        final_msg = end_command
-        if message:
-            final_msg = f"{end_command}\nEND_TASK, \"{message}\""
+        final_msg = f"{end_command}\nEND_TASK, \"{message}\""
         
         if self._send_protocol_message(final_msg):
             print(f"✅ Comando de finalização enviado")
@@ -745,12 +756,12 @@ class UDP_sender:
     
     # Métodos para usar o protocolo completo
     @classmethod
-    def start_vr_session(cls, patient_name: str, level: str, affected_side: str, task: str) -> bool:
+    def start_vr_session(cls, patient_name: str, level: int, affected_side: str, task: str) -> bool:
         """
         Inicia sessão VR usando o protocolo completo
         Args:
             patient_name: Nome do paciente
-            level: Nível do paciente
+            level: Nível do paciente (0-11)
             affected_side: "Esquerdo" ou "Direito"
             task: "Treino" ou "Jogo"
         """
@@ -820,7 +831,8 @@ def main():
     print("="*70)
     print("\n🚀 Iniciar Sessão:")
     print("  iniciar <nome> <nivel> <lado> <tarefa>")
-    print("  Exemplo: iniciar João Intermediário Direito Treino")
+    print("  Exemplo: iniciar João 5 Direito Treino")
+    print("  (nivel: 0-11, lado: Esquerdo/Direito, tarefa: Treino/Jogo)")
     print("\n🎯 Durante Sessão:")
     print("  trigger          - Envia trigger para iniciar tarefa")
     print("  fechar <lado>    - Fecha mão (esquerda/direita)")
@@ -868,11 +880,20 @@ def main():
                     parts = args.split()
                     if len(parts) < 4:
                         print("❌ Uso: iniciar <nome> <nivel> <lado> <tarefa>")
-                        print("   Exemplo: iniciar João Intermediário Direito Treino")
+                        print("   Exemplo: iniciar João 5 Direito Treino")
+                        print("   Nível: 0-11")
                         continue
                     
                     nome = parts[0]
-                    nivel = parts[1]
+                    try:
+                        nivel = int(parts[1])
+                        if not (0 <= nivel <= 11):
+                            print("❌ Nível deve ser um número entre 0 e 11")
+                            continue
+                    except ValueError:
+                        print("❌ Nível deve ser um número inteiro (0-11)")
+                        continue
+                    
                     lado = parts[2].capitalize()
                     tarefa = parts[3].capitalize()
                     

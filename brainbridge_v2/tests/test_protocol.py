@@ -1,6 +1,11 @@
 """
 Teste rápido do protocolo implementado
 """
+import sys
+import os
+# Adicionar o diretório raiz ao path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
+
 from brainbridge_v2.communication.unity import (
     UnityCommunicator, 
     PatientData, 
@@ -21,7 +26,7 @@ print("-"*70)
 # Criar dados do paciente
 patient = PatientData(
     nome="João Silva",
-    nivel="Intermediário",
+    nivel=5,  # Nível de 0 a 11
     lado="Direito"
 )
 
