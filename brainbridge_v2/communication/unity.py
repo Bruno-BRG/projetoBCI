@@ -17,6 +17,31 @@ from enum import Enum
 # PROTOCOLO DE COMUNICAÇÃO SISTEMA <-> VR
 # ============================================================================
 
+class ServerState(Enum):
+    """Estados mutuamente exclusivos do servidor"""
+    STOPPED = "stopped"           # Servidor parado
+    RUNNING = "running"           # Servidor rodando, sem conexão VR
+    CONNECTED = "connected"       # VR conectado
+
+class SessionPhase(Enum):
+    """Fases mutuamente exclusivas da sessão - máquina de estados"""
+    IDLE = "idle"                 # Sem sessão ativa
+    SETUP = "setup"               # Enviando dados/tarefa, aguardando confirmação
+    READY = "ready"               # Confirmação recebida, aguardando trigger
+    ACTIVE = "active"             # Sessão em andamento (após trigger)
+    ENDING = "ending"             # Finalização em progresso, aguardando confirmação
+    
+    def can_transition_to(self, next_phase: 'SessionPhase') -> bool:
+        """Define transições válidas da máquina de estados"""
+        transitions = {
+            SessionPhase.IDLE: {SessionPhase.SETUP},
+            SessionPhase.SETUP: {SessionPhase.READY, SessionPhase.IDLE},  # volta se falhar
+            SessionPhase.READY: {SessionPhase.ACTIVE, SessionPhase.IDLE},  # pode cancelar
+            SessionPhase.ACTIVE: {SessionPhase.ENDING},
+            SessionPhase.ENDING: {SessionPhase.IDLE},
+        }
+        return next_phase in transitions.get(self, set())
+
 class TaskType(Enum):
     """Tipos de tarefa conforme protocolo"""
     TREINO = "Treino"
@@ -60,11 +85,26 @@ class PatientData:
 
 @dataclass
 class SessionState:
-    """Estado da sessão atual"""
+    """Estado da sessão atual com máquina de estados"""
+    phase: SessionPhase = SessionPhase.IDLE
     patient: Optional[PatientData] = None
     task_type: Optional[TaskType] = None
-    is_active: bool = False
-    waiting_confirmation: bool = False
+    
+    def transition_to(self, next_phase: SessionPhase) -> bool:
+        """
+        Transiciona para próxima fase se for válido
+        Retorna True se transição bem-sucedida, False caso contrário
+        """
+        if not self.phase.can_transition_to(next_phase):
+            return False
+        self.phase = next_phase
+        return True
+    
+    def reset(self):
+        """Reseta sessão para estado inicial"""
+        self.phase = SessionPhase.IDLE
+        self.patient = None
+        self.task_type = None
 
 # ============================================================================
 # CLASSE PRINCIPAL DE COMUNICAÇÃO
@@ -112,11 +152,11 @@ class UnityCommunicator:
             
         self._initialized = True
         
-        # Estado da conexão
-        self.is_active = False
+        # Estado do servidor (máquina de estados)
+        self.server_state = ServerState.STOPPED
         self.tcp_connected = False
         
-        # Estado da sessão
+        # Estado da sessão (máquina de estados)
         self.session = SessionState()
         
         # Sockets e contextos
@@ -134,6 +174,46 @@ class UnityCommunicator:
         self.on_message_received: Optional[Callable[[str], None]] = None
         self.on_connection_changed: Optional[Callable[[bool], None]] = None
         self.on_confirmation_received: Optional[Callable[[], None]] = None
+    
+    # ========================================================================
+    # HELPERS DE TRANSIÇÃO DE ESTADO (MÁQUINA DE ESTADOS CENTRALIZADA)
+    # ========================================================================
+    
+    def _transition_server_state(self, next_state: ServerState) -> bool:
+        """Transiciona servidor para novo estado com validação"""
+        if self.server_state == next_state:
+            return True  # Já nesse estado
+        self.server_state = next_state
+        return True
+    
+    def _transition_session_phase(self, next_phase: SessionPhase) -> bool:
+        """
+        Transiciona sessão para nova fase com validação.
+        Retorna False se transição for inválida.
+        """
+        if not self.session.transition_to(next_phase):
+            return False
+        return True
+    
+    def _is_server_ready_for_session(self) -> bool:
+        """Verifica se servidor está pronto para iniciar sessão"""
+        return (
+            self.server_state == ServerState.CONNECTED and
+            self.tcp_connected and
+            self.session.phase == SessionPhase.IDLE
+        )
+    
+    def _is_session_waiting_trigger(self) -> bool:
+        """Verifica se sessão aguarda trigger"""
+        return self.session.phase == SessionPhase.READY
+    
+    def _is_session_active_for_commands(self) -> bool:
+        """Verifica se sessão está ativa para aceitar comandos"""
+        return self.session.phase == SessionPhase.ACTIVE
+    
+    def _is_server_operational(self) -> bool:
+        """Verifica se servidor está operacional (rodando)"""
+        return self.server_state in [ServerState.RUNNING, ServerState.CONNECTED]
     
     @staticmethod
     def get_all_ips() -> List[str]:
@@ -156,8 +236,8 @@ class UnityCommunicator:
         Inicia o servidor de comunicação
         Retorna True se iniciado com sucesso
         """
-        if self.is_active:
-            print("Servidor já está ativo")
+        if self.server_state != ServerState.STOPPED:
+            print("Servidor já está rodando")
             return True
             
         try:
@@ -168,6 +248,9 @@ class UnityCommunicator:
             
             # Reset do evento de parada
             self.stop_event.clear()
+            
+            # Transicionar servidor para estado RUNNING
+            self._transition_server_state(ServerState.RUNNING)
             
             # Iniciar broadcast UDP
             self.broadcast_thread = threading.Thread(
@@ -183,7 +266,6 @@ class UnityCommunicator:
             )
             self.tcp_server_thread.start()
             
-            self.is_active = True
             print(f"Servidor iniciado - ZMQ: {self.ZMQ_PORT}, TCP: {self.TCP_PORT}, UDP: {self.UDP_PORT}")
             return True
             
@@ -194,7 +276,6 @@ class UnityCommunicator:
     
     def stop_server(self):
         """Para o servidor e limpa recursos"""
-        self.is_active = False
         self.stop_event.set()
         
         # Aguardar threads terminarem
@@ -230,7 +311,14 @@ class UnityCommunicator:
                 pass
             self.zmq_context = None
         
-        # Atualizar estado
+        # Resetar sessão se ativa
+        if self.session.phase != SessionPhase.IDLE:
+            self.session.reset()
+        
+        # Transicionar servidor para estado STOPPED
+        self._transition_server_state(ServerState.STOPPED)
+        
+        # Atualizar conexão TCP
         if self.tcp_connected:
             self.tcp_connected = False
             if self.on_connection_changed:
@@ -251,23 +339,31 @@ class UnityCommunicator:
         
         Retorna True se a sessão foi iniciada com sucesso
         """
-        if not self.is_active:
-            print("❌ Erro: Servidor não está ativo")
-            return False
-        
-        if not self.tcp_connected:
-            print("❌ Erro: VR não está conectado")
+        # Validar precondições usando helpers de estado
+        if not self._is_server_ready_for_session():
+            if self.server_state == ServerState.STOPPED:
+                print("❌ Erro: Servidor não está ativo")
+            elif not self.tcp_connected:
+                print("❌ Erro: VR não está conectado")
+            elif self.session.phase != SessionPhase.IDLE:
+                print("❌ Erro: Já existe uma sessão em progresso")
             return False
         
         print("\n" + "="*60)
         print("🚀 INICIANDO SESSÃO VR - PROTOCOLO SISTEMA <-> VR")
         print("="*60)
         
+        # Transicionar para SETUP
+        if not self._transition_session_phase(SessionPhase.SETUP):
+            print("❌ Erro: Não foi possível transicionar para SETUP")
+            return False
+        
         # Passo 1: Enviar dados do paciente
         print("\n📤 [1/3] Enviando dados do paciente...")
         patient_msg = patient_data.format_message()
         if not self._send_protocol_message(patient_msg):
             print("❌ Falha ao enviar dados do paciente")
+            self.session.transition_to(SessionPhase.IDLE)
             return False
         print(f"✅ Dados enviados:\n{patient_msg}")
         time.sleep(0.5)
@@ -277,6 +373,7 @@ class UnityCommunicator:
         task_msg = f'Tarefa:\n"{task_type.value}"'
         if not self._send_protocol_message(task_msg):
             print("❌ Falha ao enviar tarefa")
+            self.session.transition_to(SessionPhase.IDLE)
             return False
         print(f"✅ Tarefa enviada: {task_type.value}")
         time.sleep(0.5)
@@ -285,7 +382,6 @@ class UnityCommunicator:
         print("\n⏳ [3/3] Aguardando confirmação do VR...")
         self.session.patient = patient_data
         self.session.task_type = task_type
-        self.session.waiting_confirmation = True
         
         print("="*60)
         print("✅ Sessão configurada - Aguardando confirmação do VR")
@@ -298,16 +394,15 @@ class UnityCommunicator:
         Envia comando de trigger para iniciar a tarefa no VR
         Deve ser chamado após receber confirmação do VR
         """
-        if not self.session.is_active and not self.session.waiting_confirmation:
-            print("❌ Erro: Nenhuma sessão aguardando trigger")
+        if not self._is_session_waiting_trigger():
+            print("❌ Erro: Sessão não está aguardando trigger")
             return False
         
         print("\n🎯 Enviando TRIGGER para iniciar tarefa...")
         if self._send_protocol_message(TriggerCommand.START.value):
-            self.session.is_active = True
-            self.session.waiting_confirmation = False
-            print("✅ Trigger enviado - Tarefa iniciada no VR")
-            return True
+            if self._transition_session_phase(SessionPhase.ACTIVE):
+                print("✅ Trigger enviado - Tarefa iniciada no VR")
+                return True
         
         print("❌ Falha ao enviar trigger")
         return False
@@ -318,8 +413,8 @@ class UnityCommunicator:
         Args:
             side: "left", "right", "esquerda" ou "direita"
         """
-        if not self.session.is_active:
-            print("❌ Erro: Sessão não está ativa")
+        if not self._is_session_active_for_commands():
+            print("❌ Erro: Sessão não está ativa para aceitar comandos")
             return False
         
         # Normalizar entrada
@@ -348,8 +443,8 @@ class UnityCommunicator:
         Args:
             side: "left", "right", "esquerda" ou "direita"
         """
-        if not self.session.is_active:
-            print("❌ Erro: Sessão não está ativa")
+        if not self._is_session_active_for_commands():
+            print("❌ Erro: Sessão não está ativa para aceitar comandos")
             return False
         
         # Normalizar entrada
@@ -380,12 +475,17 @@ class UnityCommunicator:
                     Se None, usa mensagem padrão de encorajamento
         """
         if not self.session.is_active:
-            print("❌ Erro: Nenhuma sessão ativa para finalizar")
+            print("❌ Erro: Sessão não está ativa para finalizar")
             return False
         
         print("\n" + "="*60)
         print("🏁 FINALIZANDO SESSÃO VR")
         print("="*60)
+        
+        # Transicionar para ENDING
+        if not self._transition_session_phase(SessionPhase.ENDING):
+            print("❌ Erro: Não foi possível transicionar para ENDING")
+            return False
         
         # Determinar comando de finalização baseado no tipo de tarefa
         if self.session.task_type == TaskType.TREINO:
@@ -396,6 +496,7 @@ class UnityCommunicator:
             task_name = "JOGO"
         else:
             print("❌ Erro: Tipo de tarefa desconhecido")
+            self.session.transition_to(SessionPhase.ACTIVE)  # Voltar para ACTIVE
             return False
         
         # Usar mensagem padrão se nenhuma for fornecida
@@ -408,13 +509,12 @@ class UnityCommunicator:
         
         if self._send_protocol_message(final_msg):
             print(f"✅ Comando de finalização enviado")
-            self.session.is_active = False
-            self.session.waiting_confirmation = True  # Aguardar confirmação de finalização
             print("\n⏳ Aguardando confirmação de finalização do VR...")
             print("="*60 + "\n")
             return True
         
         print("❌ Falha ao enviar comando de finalização")
+        self.session.transition_to(SessionPhase.ACTIVE)  # Voltar para ACTIVE se falhar
         return False
     
     def _send_protocol_message(self, message: str) -> bool:
@@ -422,7 +522,7 @@ class UnityCommunicator:
         Envia mensagem seguindo o protocolo (via ZMQ e TCP)
         Método interno usado pelos métodos públicos do protocolo
         """
-        if not self.is_active:
+        if not self._is_server_operational():
             return False
         
         success = False
@@ -558,6 +658,9 @@ class UnityCommunicator:
                     self.tcp_connection = conn
                     self.tcp_connected = True
                     
+                    # Transicionar servidor para CONNECTED quando VR conecta
+                    self._transition_server_state(ServerState.CONNECTED)
+                    
                     if self.on_connection_changed:
                         self.on_connection_changed(True)
                     
@@ -624,6 +727,10 @@ class UnityCommunicator:
             self.tcp_connection = None
             self.tcp_connected = False
             
+            # Transicionar servidor de volta para RUNNING quando VR desconecta
+            if self.server_state == ServerState.CONNECTED:
+                self._transition_server_state(ServerState.RUNNING)
+            
             if self.on_connection_changed:
                 self.on_connection_changed(False)
             
@@ -632,11 +739,12 @@ class UnityCommunicator:
     def _process_vr_message(self, message: str):
         """
         Processa mensagens recebidas do VR conforme protocolo
+        Gerencia transições de estado automáticas via máquina de estados
         """
         message_lower = message.lower().strip()
         
-        # Detectar confirmação de inicialização
-        if "confirm" in message_lower and self.session.waiting_confirmation:
+        # Detectar confirmação de inicialização (VR recebeu dados/tarefa)
+        if "confirm" in message_lower and self.session.phase == SessionPhase.SETUP:
             print("\n" + "="*60)
             print("✅ CONFIRMAÇÃO RECEBIDA DO VR")
             print("="*60)
@@ -644,21 +752,21 @@ class UnityCommunicator:
             print("🎯 Aguardando trigger para iniciar a tarefa...")
             print("="*60 + "\n")
             
+            # Transicionar para READY
+            self._transition_session_phase(SessionPhase.READY)
+            
             if self.on_confirmation_received:
                 self.on_confirmation_received()
         
         # Detectar confirmação de finalização
-        elif ("finalizar" in message_lower or "end" in message_lower) and self.session.waiting_confirmation:
+        elif ("finalizar" in message_lower or "end" in message_lower) and self.session.phase == SessionPhase.ENDING:
             print("\n" + "="*60)
             print("✅ CONFIRMAÇÃO DE FINALIZAÇÃO RECEBIDA")
             print("="*60)
             print("📥 VR confirmou finalização da sessão")
             
-            # Resetar estado da sessão
-            self.session.patient = None
-            self.session.task_type = None
-            self.session.is_active = False
-            self.session.waiting_confirmation = False
+            # Transicionar para IDLE
+            self._transition_session_phase(SessionPhase.IDLE)
             
             print("🏁 Sessão encerrada com sucesso")
             print("="*60 + "\n")
@@ -747,7 +855,7 @@ class UDP_sender:
     @classmethod
     def is_server_active(cls) -> bool:
         """Verifica se o servidor está ativo"""
-        return cls._communicator.is_active
+        return cls._communicator.server_state != ServerState.STOPPED
     
     @classmethod
     def restart_broadcast(cls, duration=3.0):
