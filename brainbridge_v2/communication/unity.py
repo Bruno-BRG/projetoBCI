@@ -474,7 +474,7 @@ class UnityCommunicator:
             message: Mensagem opcional para enviar junto com a finalização
                     Se None, usa mensagem padrão de encorajamento
         """
-        if not self.session.is_active:
+        if not self._is_session_active_for_commands():
             print("❌ Erro: Sessão não está ativa para finalizar")
             return False
         
