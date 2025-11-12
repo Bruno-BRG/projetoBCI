@@ -1,13 +1,24 @@
 """
 Exemplo de uso do protocolo de comunicação Sistema <-> VR
 Este script demonstra como usar o protocolo completo para uma sessão de treino
+
+Protocolo implementado:
+1. Sistema: Broadcast UDP com "Confirm"
+2. VR: Responde com "Header: Confirm"
+3. Sistema: Envia Dados Paciente (Nome, Nível, Lado)
+4. Sistema: Envia Tarefa ("Treino" ou "Jogo")
+5. Sistema: Envia Trigger + LEFT/RIGHT_HAND_CLOSE
+6. VR: Responde com LEFT_FLOWER ou RIGHT_FLOWER
+7. Sistema: Envia END_TASK com mensagem
+8. VR: Confirma finalização
 """
 
 import time
 from brainbridge_v2.communication.unity import (
     UnityCommunicator,
     PatientData,
-    TaskType
+    TaskType,
+    ActionCommand
 )
 
 
@@ -33,11 +44,15 @@ def exemplo_sessao_completa():
         print("\n✅ VR confirmou recebimento dos dados!")
         print("🎯 Pronto para enviar trigger e iniciar tarefa")
     
+    def on_flower_action(action: ActionCommand):
+        print(f"\n🌸 VR acionou: {action.value}")
+    
     def on_message(msg):
         print(f"\n📨 Mensagem do VR: {msg}")
     
     communicator.set_connection_callback(on_vr_connected)
     communicator.set_confirmation_callback(on_vr_confirmation)
+    communicator.set_flower_callback(on_flower_action)
     communicator.set_message_callback(on_message)
     
     # 3. Iniciar servidor
@@ -49,10 +64,16 @@ def exemplo_sessao_completa():
     print("✅ Servidor iniciado")
     print("📡 Aguardando VR conectar...")
     
-    # 4. Aguardar VR conectar
-    while not communicator.tcp_connected:
+    # 4. Aguardar VR conectar (max 10 segundos para teste)
+    for i in range(10):
+        if communicator.tcp_connected:
+            break
         time.sleep(1)
         print(".", end="", flush=True)
+    
+    if not communicator.tcp_connected:
+        print("\n⚠️  VR não conectou em 10 segundos")
+        print("   (Em produção, aguarde manualmente)")
     
     print("\n")
     
@@ -70,14 +91,17 @@ def exemplo_sessao_completa():
         communicator.stop_server()
         return
     
-    # 7. Aguardar confirmação do VR
+    # 7. Aguardar confirmação do VR (max 5 segundos)
     print("\n⏳ Aguardando VR confirmar...")
-    while communicator.session.waiting_confirmation and not communicator.session.is_active:
-        time.sleep(0.5)
+    for i in range(5):
+        if not communicator.session.waiting_confirmation:
+            break
+        time.sleep(1)
+        print(".", end="", flush=True)
     
     # 8. Enviar trigger para iniciar
-    print("\n🎯 Enviando trigger para iniciar tarefa...")
-    time.sleep(2)  # Pequeno delay
+    print("\n\n🎯 Enviando trigger para iniciar tarefa...")
+    time.sleep(1)  # Pequeno delay
     if not communicator.send_trigger():
         print("❌ Falha ao enviar trigger")
         communicator.stop_server()
@@ -97,7 +121,7 @@ def exemplo_sessao_completa():
     ]
     
     for descricao, comando in comandos_exemplo:
-        time.sleep(3)
+        time.sleep(2)
         print(f"\n📤 {descricao}...")
         comando()
     
@@ -107,8 +131,8 @@ def exemplo_sessao_completa():
     print(" FINALIZANDO SESSÃO")
     print("="*70)
     
-    if not communicator.end_session("Treino completado com sucesso"):
-        print("❌ Falha ao finalizar sessão")
+    if not communicator.end_task("Treino completado com sucesso"):
+        print("❌ Falha ao finalizar tarefa")
     
     # 11. Aguardar confirmação de finalização
     print("\n⏳ Aguardando confirmação de finalização do VR...")
@@ -202,7 +226,7 @@ def exemplo_sessao_interativa():
         
         if comando == "fim":
             msg = input("Mensagem de finalização (opcional): ").strip()
-            communicator.end_session(msg if msg else None)
+            communicator.end_task(msg if msg else "")
             break
         elif "fechar" in comando:
             lado = "direita" if "direita" in comando else "esquerda"

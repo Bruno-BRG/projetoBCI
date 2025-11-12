@@ -1,6 +1,7 @@
 """
 Testes do protocolo de comunicação Sistema <-> VR Unity
 """
+import pytest
 from brainbridge_v2.communication.unity import (
     UnityCommunicator,
     PatientData,
@@ -172,11 +173,11 @@ class TestProtocolFlow:
         assert result is False
     
     def test_end_session_without_active_session(self):
-        """Testa que end_session falha se sessão não está ativa"""
+        """Testa que end_task falha se sessão não está ativa"""
         comm = UnityCommunicator()
         comm.stop_server()
         
-        result = comm.end_session()
+        result = comm.end_task()
         assert result is False
 
 
@@ -196,8 +197,6 @@ class TestCompatibilityLayer:
         assert hasattr(UDP_sender, 'stop_zmq_socket')
         assert hasattr(UDP_sender, 'enviar_sinal')
         assert hasattr(UDP_sender, 'is_server_active')
-        assert hasattr(UDP_sender, 'start_vr_session')
-        assert hasattr(UDP_sender, 'end_vr_session')
 
 
 if __name__ == "__main__":

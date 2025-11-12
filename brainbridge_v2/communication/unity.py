@@ -2,13 +2,128 @@
 """
 Sistema unificado de comunicação com Unity
 Substitui UDP_sender.py e udp_receiver.py por uma abordagem mais simples e robusta
+
+Protocolo:
+1. Sistema: Broadcast UDP com "Confirm"
+2. VR: Responde com "Header: Confirm"
+3. Sistema: Envia Dados Paciente (Nome, Nível, Lado)
+4. Sistema: Envia Tarefa ("Treino" ou "Jogo")
+5. Sistema: Envia Trigger + LEFT/RIGHT_HAND_CLOSE
+6. VR: Responde com LEFT_FLOWER ou RIGHT_FLOWER
+7. Sistema: Envia END_TASK ou END_GAME com mensagem
+8. VR: Confirma finalização
 """
 
 import socket
 import threading
 import time
 import zmq
+from enum import Enum
+from dataclasses import dataclass
 from typing import Optional, List, Callable
+
+
+# ============================================================================
+# ENUMS e CLASSES DE DADOS DO PROTOCOLO
+# ============================================================================
+
+class TaskType(Enum):
+    """Tipo de tarefa no VR"""
+    TREINO = "Treino"
+    JOGO = "Jogo"
+
+
+class SessionPhase(Enum):
+    """Fases da sessão (para máquina de estados)"""
+    IDLE = "idle"
+    SETUP = "setup"
+    READY = "ready"
+    ACTIVE = "active"
+    ENDING = "ending"
+
+
+class ServerState(Enum):
+    """Estados do servidor"""
+    STOPPED = "stopped"
+    RUNNING = "running"
+    CONNECTED = "connected"
+
+
+class ActionCommand(Enum):
+    """Comandos de ação do sistema"""
+    LEFT_HAND_CLOSE = "LEFT_HAND_CLOSE"
+    RIGHT_HAND_CLOSE = "RIGHT_HAND_CLOSE"
+    LEFT_FLOWER = "LEFT_FLOWER"
+    RIGHT_FLOWER = "RIGHT_FLOWER"
+
+
+class EndTaskCommand(Enum):
+    """Comandos de finalização de tarefa"""
+    END_TRAINING = "Finalizar_tarefa_treino"
+    END_GAME = "Finalizar_tarefa_jogo"
+
+
+@dataclass
+class PatientData:
+    """Dados do paciente para enviar ao VR"""
+    nome: str
+    nivel: int  # 0-11
+    lado: str   # "Direito" ou "Esquerdo"
+    
+    def __post_init__(self):
+        """Valida dados do paciente"""
+        if not (0 <= self.nivel <= 11):
+            raise ValueError(f"Nível deve estar entre 0 e 11, recebido: {self.nivel}")
+        
+        if self.lado not in ["Direito", "Esquerdo"]:
+            raise ValueError(f"Lado deve ser 'Direito' ou 'Esquerdo', recebido: {self.lado}")
+    
+    def format_message(self) -> str:
+        """Formata dados do paciente para envio ao VR"""
+        return f"Dados Paciente:\nNome: {self.nome}\nNivel: {self.nivel}\nLado: {self.lado}"
+
+
+@dataclass
+class SessionState:
+    """Estado da sessão atual"""
+    patient: Optional[PatientData] = None
+    task_type: Optional[TaskType] = None
+    is_active: bool = False
+    waiting_confirmation: bool = False
+    phase: 'SessionPhase' = None  # Suporte para máquina de estados
+    
+    def __post_init__(self):
+        """Inicializa a fase"""
+        if self.phase is None:
+            self.phase = SessionPhase.IDLE
+    
+    def reset(self):
+        """Reseta o estado da sessão"""
+        self.patient = None
+        self.task_type = None
+        self.is_active = False
+        self.waiting_confirmation = False
+        self.phase = SessionPhase.IDLE
+    
+    def transition_to(self, new_phase: 'SessionPhase') -> bool:
+        """
+        Tenta transicionar para nova fase
+        Retorna True se transição foi válida
+        """
+        # Transições válidas
+        valid_transitions = {
+            SessionPhase.IDLE: [SessionPhase.SETUP],
+            SessionPhase.SETUP: [SessionPhase.READY, SessionPhase.IDLE],
+            SessionPhase.READY: [SessionPhase.ACTIVE, SessionPhase.IDLE],
+            SessionPhase.ACTIVE: [SessionPhase.ENDING, SessionPhase.IDLE],
+            SessionPhase.ENDING: [SessionPhase.IDLE],
+        }
+        
+        current = self.phase
+        if current in valid_transitions and new_phase in valid_transitions[current]:
+            self.phase = new_phase
+            return True
+        return False
 
 class UnityCommunicator:
     """
@@ -22,6 +137,9 @@ class UnityCommunicator:
     ZMQ_PORT = 5555       # porta para ZMQ publisher
     BROADCAST_INTERVAL = 1.0
     BUFFER_SIZE = 4096
+    
+    # Protocolo
+    CONFIRM_HEADER = "Confirm"
     
     # Variáveis de classe para singleton
     _instance: Optional['UnityCommunicator'] = None
@@ -46,6 +164,9 @@ class UnityCommunicator:
         self.is_active = False
         self.tcp_connected = False
         
+        # Estado da sessão (novo protocolo)
+        self.session = SessionState()
+        
         # Sockets e contextos
         self.zmq_context: Optional[zmq.Context] = None
         self.zmq_socket: Optional[zmq.Socket] = None
@@ -60,6 +181,10 @@ class UnityCommunicator:
         # Callbacks para eventos
         self.on_message_received: Optional[Callable[[str], None]] = None
         self.on_connection_changed: Optional[Callable[[bool], None]] = None
+        
+        # Callbacks para novo protocolo
+        self.on_confirmation: Optional[Callable[[], None]] = None  # VR confirmou
+        self.on_flower_action: Optional[Callable[[ActionCommand], None]] = None  # VR enviou FLOWER
     
     @staticmethod
     def get_all_ips() -> List[str]:
@@ -199,6 +324,13 @@ class UnityCommunicator:
         
         return success
     
+    def _send_protocol_message(self, message: str) -> bool:
+        """
+        Método legado para compatibilidade com testes anteriores
+        Alias para send_command
+        """
+        return self.send_command(message)
+    
     def send_hand_command(self, hand: str) -> bool:
         """
         Envia comando de mão (direita/esquerda)
@@ -222,6 +354,161 @@ class UnityCommunicator:
         else:
             print(f"Comando de trigger inválido: {hand}")
             return False
+    
+    # ========================================================================
+    # NOVO PROTOCOLO - MÉTODOS DE SESSÃO E TAREFA
+    # ========================================================================
+    
+    def start_session(self, patient: PatientData, task_type: TaskType) -> bool:
+        """
+        Inicia uma nova sessão com paciente e tipo de tarefa
+        Envia dados do paciente e tipo de tarefa ao VR
+        """
+        if not self.is_active:
+            print("Erro: Servidor não está ativo")
+            return False
+        
+        if not self.tcp_connected:
+            print("Erro: VR não está conectado")
+            return False
+        
+        # Validar paciente
+        try:
+            if not isinstance(patient, PatientData):
+                raise ValueError("Paciente deve ser uma instância de PatientData")
+        except Exception as e:
+            print(f"Erro ao validar paciente: {e}")
+            return False
+        
+        # Atualizar estado da sessão
+        self.session.patient = patient
+        self.session.task_type = task_type
+        self.session.waiting_confirmation = True
+        
+        # 1. Enviar dados do paciente
+        print(f"\n📋 Enviando dados do paciente...")
+        patient_message = patient.format_message()
+        if not self.send_command(patient_message):
+            print("Erro ao enviar dados do paciente")
+            self.session.reset()
+            return False
+        
+        time.sleep(0.5)  # Pequeno delay entre mensagens
+        
+        # 2. Enviar tipo de tarefa
+        print(f"📌 Enviando tipo de tarefa: {task_type.value}")
+        if not self.send_command(f"Tarefa:\n{task_type.value}"):
+            print("Erro ao enviar tipo de tarefa")
+            self.session.reset()
+            return False
+        
+        print("✅ Sessão iniciada com sucesso")
+        return True
+    
+    def send_trigger(self) -> bool:
+        """
+        Envia trigger para iniciar tarefa no VR
+        Segue com comando de fechar mão
+        """
+        if not self._is_session_active_for_commands():
+            print("Erro: Sessão não está ativa para enviar trigger")
+            return False
+        
+        print(f"🎯 Enviando trigger...")
+        if not self.send_command("Trigger"):
+            return False
+        
+        time.sleep(0.3)
+        
+        # Enviar comando de fechar mão baseado no lado do paciente
+        hand_command = ActionCommand.RIGHT_HAND_CLOSE if self.session.patient.lado == "Direito" else ActionCommand.LEFT_HAND_CLOSE
+        print(f"👋 Enviando comando: {hand_command.value}")
+        
+        success = self.send_command(hand_command.value)
+        
+        if success:
+            self.session.is_active = True
+            self.session.waiting_confirmation = False
+        
+        return success
+    
+    def send_hand_close(self, lado: str) -> bool:
+        """
+        Envia comando de fechar mão para o lado especificado
+        Compatível com novo protocolo
+        """
+        if not self._is_session_active_for_commands():
+            print("Erro: Sessão não está ativa")
+            return False
+        
+        if lado.lower() in ['direita', 'right']:
+            return self.send_command(ActionCommand.RIGHT_HAND_CLOSE.value)
+        elif lado.lower() in ['esquerda', 'left']:
+            return self.send_command(ActionCommand.LEFT_HAND_CLOSE.value)
+        else:
+            print(f"Lado inválido: {lado}")
+            return False
+    
+    def send_flower_action(self, lado: str) -> bool:
+        """
+        Envia comando de ação de flor
+        (simulação de resposta do VR)
+        """
+        if lado.lower() in ['direita', 'right']:
+            return self.send_command(ActionCommand.RIGHT_FLOWER.value)
+        elif lado.lower() in ['esquerda', 'left']:
+            return self.send_command(ActionCommand.LEFT_FLOWER.value)
+        else:
+            print(f"Lado inválido: {lado}")
+            return False
+    
+    def end_task(self, message: str = "") -> bool:
+        """
+        Finaliza a tarefa atual
+        Envia END_TASK com mensagem opcional
+        """
+        if not self.session.is_active:
+            print("Erro: Nenhuma tarefa ativa para finalizar")
+            return False
+        
+        if not self.tcp_connected:
+            print("Erro: VR não está conectado")
+            return False
+        
+        # Escolher comando baseado no tipo de tarefa
+        if self.session.task_type == TaskType.TREINO:
+            end_command = EndTaskCommand.END_TRAINING.value
+        else:
+            end_command = EndTaskCommand.END_GAME.value
+        
+        # Enviar comando de finalização
+        end_message = f"{end_command}\n{message}" if message else end_command
+        print(f"✋ Finalizando tarefa: {end_message}")
+        
+        success = self.send_command(end_message)
+        
+        if success:
+            self.session.reset()
+        
+        return success
+    
+    def set_confirmation_callback(self, callback: Callable[[], None]):
+        """Define callback para confirmação do VR"""
+        self.on_confirmation = callback
+    
+    def set_flower_callback(self, callback: Callable[[ActionCommand], None]):
+        """Define callback para ações de flor do VR"""
+        self.on_flower_action = callback
+    
+    def _is_session_active_for_commands(self) -> bool:
+        """
+        Verifica se sessão está ativa e pronta para comandos
+        Retorna True se: servidor ativo, VR conectado e sessão ativa
+        """
+        return (self.is_active and 
+                self.tcp_connected and 
+                self.session.patient is not None and
+                self.session.task_type is not None)
     
     def _broadcast_ips(self):
         """
@@ -295,6 +582,7 @@ class UnityCommunicator:
     def _handle_tcp_connection(self, conn: socket.socket, addr):
         """
         Lida com uma conexão TCP específica
+        Processa mensagens do VR e dispara callbacks apropriados
         """
         try:
             conn.settimeout(1.0)
@@ -309,6 +597,10 @@ class UnityCommunicator:
                     message = data.decode('utf-8', errors='ignore').strip()
                     print(f"[TCP] Recebido: {message}")
                     
+                    # Processar mensagens do novo protocolo
+                    self._process_vr_message(message)
+                    
+                    # Callback genérico (compatibilidade)
                     if self.on_message_received:
                         self.on_message_received(message)
                         
@@ -331,6 +623,36 @@ class UnityCommunicator:
                 self.on_connection_changed(False)
             
             print("[TCP] Conexão encerrada")
+    
+    def _process_vr_message(self, message: str):
+        """
+        Processa mensagens recebidas do VR conforme o novo protocolo
+        """
+        msg_lower = message.lower()
+        
+        # Reconhecer confirmação de header
+        if "confirm" in msg_lower:
+            print("✅ VR confirmou recebimento!")
+            if self.on_confirmation:
+                self.on_confirmation()
+            if self.session.waiting_confirmation:
+                self.session.waiting_confirmation = False
+        
+        # Reconhecer ações de flor
+        if "left_flower" in msg_lower:
+            print("🌸 VR acionou FLOR ESQUERDA")
+            if self.on_flower_action:
+                self.on_flower_action(ActionCommand.LEFT_FLOWER)
+        
+        if "right_flower" in msg_lower:
+            print("🌸 VR acionou FLOR DIREITA")
+            if self.on_flower_action:
+                self.on_flower_action(ActionCommand.RIGHT_FLOWER)
+        
+        # Reconhecer confirmação de finalização
+        if "confirmar_finalização" in msg_lower or "confirm_end" in msg_lower:
+            print("✅ VR confirmou finalização!")
+            self.session.is_active = False
     
     def set_message_callback(self, callback: Callable[[str], None]):
         """Define callback para mensagens recebidas"""
