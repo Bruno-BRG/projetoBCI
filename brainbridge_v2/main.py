@@ -67,76 +67,6 @@ def run_gui():
         return 1
 
 
-def run_cli():
-    """Executa interface de linha de comando"""
-    print("=== BrainBridge CLI ===")
-    print("Interface de linha de comando em desenvolvimento...")
-    
-    # TODO: Implementar CLI completa
-    print("\nOpções disponíveis:")
-    print("1. Listar pacientes")
-    print("2. Iniciar sessão de gravação")
-    print("3. Treinar modelo")
-    print("4. Simular dados")
-    
-    return 0
-
-
-def run_simulation():
-    """Executa modo simulação"""
-    print("=== Modo Simulação ===")
-    
-    try:
-        from acquisition.simulators import EEGSimulator
-        from core.eeg_data import EEGBuffer
-        
-        def sample_callback(sample):
-            print(f"Amostra recebida: {len(sample.channels)} canais, marker: {sample.marker}")
-        
-        buffer = EEGBuffer()
-        simulator = EEGSimulator(sample_callback)
-        
-        print("Iniciando simulação... (Ctrl+C para parar)")
-        simulator.start()
-        
-        try:
-            import time
-            while True:
-                time.sleep(1)
-        except KeyboardInterrupt:
-            print("\nParando simulação...")
-            simulator.stop()
-        
-        return 0
-        
-    except ImportError as e:
-        print(f"Erro ao importar simulador: {e}")
-        return 1
-    except Exception as e:
-        print(f"Erro na simulação: {e}")
-        return 1
-
-
-def run_training():
-    """Executa modo treinamento"""
-    print("=== Modo Treinamento ===")
-    
-    if not HAS_ML:
-        print("Erro: TensorFlow não está instalado. Execute: pip install tensorflow")
-        return 1
-    
-    print("Sistema de treinamento em desenvolvimento...")
-    
-    # TODO: Implementar interface de treinamento
-    try:
-        from ml.trainer import ModelTrainer
-        print("Trainer importado com sucesso")
-        return 0
-    except ImportError as e:
-        print(f"Erro ao importar trainer: {e}")
-        return 1
-
-
 def check_environment():
     """Verifica o ambiente e dependências"""
     print("=== Verificação do Ambiente ===")
@@ -191,12 +121,6 @@ Exemplos:
         """
     )
     
-    parser.add_argument('--cli', action='store_true',
-                       help='Executar interface de linha de comando')
-    parser.add_argument('--simulate', action='store_true',
-                       help='Executar modo simulação')
-    parser.add_argument('--train', action='store_true',
-                       help='Executar modo treinamento')
     parser.add_argument('--check-env', action='store_true',
                        help='Verificar ambiente e dependências')
     parser.add_argument('--version', action='version', version='BrainBridge 2.0.0')
@@ -209,12 +133,7 @@ Exemplos:
         return 0
     
     # Executar modo apropriado
-    if args.cli:
-        return run_cli()
-    elif args.simulate:
-        return run_simulation()
-    elif args.train:
-        return run_training()
+
     else:
         # Modo padrão: GUI
         return run_gui()

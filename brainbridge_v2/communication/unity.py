@@ -2,61 +2,97 @@
 """
 Sistema unificado de comunicação com Unity
 Substitui UDP_sender.py e udp_receiver.py por uma abordagem mais simples e robusta
-Implementa protocolo de comunicação Sistema <-> VR conforme especificação
+
+Protocolo:
+1. Sistema: Broadcast UDP com "Confirm"
+2. VR: Responde com "Header: Confirm" (ou envia HEADER)
+3. Sistema: Envia Dados Paciente (JSON + legível)
+4. Sistema: Envia Tarefa ("Treino" ou "Jogo")
+5. Sistema: Envia Trigger + LEFT/RIGHT_HAND_CLOSE
+6. VR: Responde com LEFT_FLOWER ou RIGHT_FLOWER
+7. Sistema: Envia END_TASK ou END_GAME com mensagem
+8. VR: Confirma finalização
 """
 
 import socket
 import threading
 import time
 import zmq
-from typing import Optional, List, Callable, Dict
-from dataclasses import dataclass
 from enum import Enum
+from dataclasses import dataclass
+from typing import Optional, List, Callable
 
-# ============================================================================
-# PROTOCOLO DE COMUNICAÇÃO SISTEMA <-> VR
-# ============================================================================
+# ========================================================================
+# ENUMS e CLASSES DE DADOS DO PROTOCOLO
+# ========================================================================
 
 class TaskType(Enum):
-    """Tipos de tarefa conforme protocolo"""
+    """Tipo de tarefa no VR"""
     TREINO = "Treino"
     JOGO = "Jogo"
 
-class TriggerCommand(Enum):
-    """Comandos de trigger conforme protocolo"""
-    START = "Trigger"
-    HAND_CLOSE = "****_HAND_CLOSE"  # será substituído por LEFT/RIGHT
+
+class SessionPhase(Enum):
+    """Fases da sessão (para máquina de estados)"""
+    IDLE = "idle"
+    SETUP = "setup"
+    READY = "ready"
+    ACTIVE = "active"
+    ENDING = "ending"
+
+
+class ServerState(Enum):
+    """Estados do servidor"""
+    STOPPED = "stopped"
+    RUNNING = "running"
+    CONNECTED = "connected"
+
 
 class ActionCommand(Enum):
-    """Comandos de ação durante sessão"""
-    LEFT_FLOWER = "LEFT_FLOWER"
-    RIGHT_FLOWER = "RIGHT_FLOWER"
+    """Comandos de ação do sistema"""
     LEFT_HAND_CLOSE = "LEFT_HAND_CLOSE"
     RIGHT_HAND_CLOSE = "RIGHT_HAND_CLOSE"
+    LEFT_FLOWER = "LEFT_FLOWER"
+    RIGHT_FLOWER = "RIGHT_FLOWER"
+
 
 class EndTaskCommand(Enum):
-    """Comandos de finalização"""
+    """Comandos de finalização de tarefa"""
     END_TRAINING = "Finalizar_tarefa_treino"
     END_GAME = "Finalizar_tarefa_jogo"
 
+
 @dataclass
 class PatientData:
-    """Dados do paciente conforme protocolo"""
+    """Dados do paciente para enviar ao VR"""
     nome: str
-    nivel: int  # Nível de 0 a 11
-    lado: str   # "Esquerdo" ou "Direito"
-    
+    nivel: int  # 0-24 (conforme FlowerFases_Control do Unity)
+    lado: str   # "Direito" ou "Esquerdo"
+
     def __post_init__(self):
-        """Valida os dados após inicialização"""
-        if not isinstance(self.nivel, int) or not (0 <= self.nivel <= 11):
-            raise ValueError(f"Nível deve ser um número inteiro entre 0 e 11. Recebido: {self.nivel}")
-        
-        if self.lado not in ["Esquerdo", "Direito"]:
-            raise ValueError(f"Lado deve ser 'Esquerdo' ou 'Direito'. Recebido: {self.lado}")
-    
+        """Valida dados do paciente"""
+        if not (0 <= self.nivel <= 24):
+            raise ValueError(f"Nível deve estar entre 0 e 24, recebido: {self.nivel}")
+
+        if self.lado not in ["Direito", "Esquerdo"]:
+            raise ValueError(f"Lado deve ser 'Direito' ou 'Esquerdo', recebido: {self.lado}")
+
     def format_message(self) -> str:
-        """Formata mensagem de dados do paciente conforme protocolo"""
+        """
+        Formata dados do paciente para envio ao VR (formato legível)
+        Nota: start_session agora prefere JSON, mas mantemos formato legível para compatibilidade
+        """
         return f"Dados Paciente:\nNome: {self.nome}\nNivel: {self.nivel}\nLado: {self.lado}"
+
+    def to_json(self) -> str:
+        """Converte para JSON para protocolo moderno"""
+        import json
+        return json.dumps({
+            "nome": self.nome,
+            "nivel": self.nivel,
+            "lado": self.lado
+        })
+
 
 @dataclass
 class SessionState:
@@ -65,38 +101,61 @@ class SessionState:
     task_type: Optional[TaskType] = None
     is_active: bool = False
     waiting_confirmation: bool = False
+    phase: 'SessionPhase' = None  # Suporte para máquina de estados
 
-# ============================================================================
-# CLASSE PRINCIPAL DE COMUNICAÇÃO
-# ============================================================================
+    def __post_init__(self):
+        """Inicializa a fase"""
+        if self.phase is None:
+            self.phase = SessionPhase.IDLE
+
+    def reset(self):
+        """Reseta o estado da sessão"""
+        self.patient = None
+        self.task_type = None
+        self.is_active = False
+        self.waiting_confirmation = False
+        self.phase = SessionPhase.IDLE
+
+    def transition_to(self, new_phase: 'SessionPhase') -> bool:
+        """
+        Tenta transicionar para nova fase
+        Retorna True se transição foi válida
+        """
+        valid_transitions = {
+            SessionPhase.IDLE: [SessionPhase.SETUP],
+            SessionPhase.SETUP: [SessionPhase.READY, SessionPhase.IDLE],
+            SessionPhase.READY: [SessionPhase.ACTIVE, SessionPhase.IDLE],
+            SessionPhase.ACTIVE: [SessionPhase.ENDING, SessionPhase.IDLE],
+            SessionPhase.ENDING: [SessionPhase.IDLE],
+        }
+
+        current = self.phase
+        if current in valid_transitions and new_phase in valid_transitions[current]:
+            self.phase = new_phase
+            return True
+        return False
+
 
 class UnityCommunicator:
     """
     Classe unificada para comunicação com Unity usando TCP + ZMQ
-    Implementa protocolo completo Sistema <-> VR conforme especificação
-    
-    Fluxo do Protocolo:
-    1. Broadcast UDP com header "Confirm"
-    2. Envio de dados do paciente
-    3. Envio de tarefa (Treino/Jogo)
-    4. Trigger para iniciar
-    5. Comandos durante sessão (HAND_CLOSE, FLOWER, etc)
-    6. Finalização de tarefa
-    7. Confirmação de finalização
+    Combina as funcionalidades de UDP_sender e udp_receiver em uma única interface
     """
-    
+
     # Configurações
     UDP_PORT = 12346      # porta para broadcast de IPs
     TCP_PORT = 12345      # porta para servidor TCP Unity
     ZMQ_PORT = 5555       # porta para ZMQ publisher
     BROADCAST_INTERVAL = 1.0
     BUFFER_SIZE = 4096
-    CONFIRM_HEADER = "Confirm"  # Header para broadcast conforme protocolo
-    
+
+    # Protocolo
+    CONFIRM_HEADER = "Confirm"
+
     # Variáveis de classe para singleton
     _instance: Optional['UnityCommunicator'] = None
     _lock = threading.Lock()
-    
+
     def __new__(cls):
         """Implementa padrão singleton"""
         if cls._instance is None:
@@ -104,37 +163,43 @@ class UnityCommunicator:
                 if cls._instance is None:
                     cls._instance = super(UnityCommunicator, cls).__new__(cls)
         return cls._instance
-    
+
     def __init__(self):
         """Inicializa o comunicador"""
         if hasattr(self, '_initialized'):
             return
-            
+
         self._initialized = True
-        
+
         # Estado da conexão
         self.is_active = False
         self.tcp_connected = False
-        
-        # Estado da sessão
+
+        # Estado da sessão (novo protocolo)
         self.session = SessionState()
-        
+
         # Sockets e contextos
         self.zmq_context: Optional[zmq.Context] = None
         self.zmq_socket: Optional[zmq.Socket] = None
         self.tcp_connection: Optional[socket.socket] = None
-        
+
         # Threads de controle
         self.broadcast_thread: Optional[threading.Thread] = None
         self.tcp_server_thread: Optional[threading.Thread] = None
         self.tcp_handler_thread: Optional[threading.Thread] = None
         self.stop_event = threading.Event()
-        
+
+        # evita reenvio repetido após confirmação
+        self._sent_session_info = False
+
         # Callbacks para eventos
         self.on_message_received: Optional[Callable[[str], None]] = None
         self.on_connection_changed: Optional[Callable[[bool], None]] = None
-        self.on_confirmation_received: Optional[Callable[[], None]] = None
-    
+
+        # Callbacks para novo protocolo
+        self.on_confirmation: Optional[Callable[[], None]] = None  # VR confirmou
+        self.on_flower_action: Optional[Callable[[ActionCommand], None]] = None  # VR enviou FLOWER
+
     @staticmethod
     def get_all_ips() -> List[str]:
         """
@@ -150,63 +215,64 @@ class UnityCommunicator:
         if not ips:
             ips.add('127.0.0.1')
         return list(ips)
-    
+
     def start_server(self) -> bool:
         """
         Inicia o servidor de comunicação
         Retorna True se iniciado com sucesso
         """
         if self.is_active:
-            print("Servidor já está ativo")
+            print("Servidor já está ativo", flush=True)
             return True
-            
+
         try:
             # Inicializar ZMQ
             self.zmq_context = zmq.Context()
             self.zmq_socket = self.zmq_context.socket(zmq.PUB)
             self.zmq_socket.bind(f"tcp://*:{self.ZMQ_PORT}")
-            
+
             # Reset do evento de parada
             self.stop_event.clear()
-            
+            self._sent_session_info = False
+
             # Iniciar broadcast UDP
             self.broadcast_thread = threading.Thread(
-                target=self._broadcast_ips, 
+                target=self._broadcast_ips,
                 daemon=True
             )
             self.broadcast_thread.start()
-            
+
             # Iniciar servidor TCP
             self.tcp_server_thread = threading.Thread(
-                target=self._tcp_server, 
+                target=self._tcp_server,
                 daemon=True
             )
             self.tcp_server_thread.start()
-            
+
             self.is_active = True
-            print(f"Servidor iniciado - ZMQ: {self.ZMQ_PORT}, TCP: {self.TCP_PORT}, UDP: {self.UDP_PORT}")
+            print(f"Servidor iniciado - ZMQ: {self.ZMQ_PORT}, TCP: {self.TCP_PORT}, UDP: {self.UDP_PORT}", flush=True)
             return True
-            
+
         except Exception as e:
-            print(f"Erro ao iniciar servidor: {e}")
+            print(f"Erro ao iniciar servidor: {e}", flush=True)
             self.stop_server()
             return False
-    
+
     def stop_server(self):
         """Para o servidor e limpa recursos"""
         self.is_active = False
         self.stop_event.set()
-        
+
         # Aguardar threads terminarem
         if self.broadcast_thread and self.broadcast_thread.is_alive():
             self.broadcast_thread.join(timeout=2.0)
-            
+
         if self.tcp_server_thread and self.tcp_server_thread.is_alive():
             self.tcp_server_thread.join(timeout=2.0)
-            
+
         if self.tcp_handler_thread and self.tcp_handler_thread.is_alive():
             self.tcp_handler_thread.join(timeout=2.0)
-        
+
         # Fechar conexão TCP
         if self.tcp_connection:
             try:
@@ -214,7 +280,7 @@ class UnityCommunicator:
             except Exception:
                 pass
             self.tcp_connection = None
-            
+
         # Fechar ZMQ
         if self.zmq_socket:
             try:
@@ -222,272 +288,75 @@ class UnityCommunicator:
             except Exception:
                 pass
             self.zmq_socket = None
-            
+
         if self.zmq_context:
             try:
                 self.zmq_context.term()
             except Exception:
                 pass
             self.zmq_context = None
-        
+
         # Atualizar estado
         if self.tcp_connected:
             self.tcp_connected = False
             if self.on_connection_changed:
                 self.on_connection_changed(False)
-        
-        print("Servidor parado e recursos limpos")
-    
-    # ========================================================================
-    # MÉTODOS DO PROTOCOLO SISTEMA <-> VR
-    # ========================================================================
-    
-    def start_session(self, patient_data: PatientData, task_type: TaskType) -> bool:
-        """
-        Inicia uma sessão completa seguindo o protocolo:
-        1. Envia dados do paciente
-        2. Envia tipo de tarefa
-        3. Aguarda confirmação do VR
-        
-        Retorna True se a sessão foi iniciada com sucesso
-        """
-        if not self.is_active:
-            print("❌ Erro: Servidor não está ativo")
-            return False
-        
-        if not self.tcp_connected:
-            print("❌ Erro: VR não está conectado")
-            return False
-        
-        print("\n" + "="*60)
-        print("🚀 INICIANDO SESSÃO VR - PROTOCOLO SISTEMA <-> VR")
-        print("="*60)
-        
-        # Passo 1: Enviar dados do paciente
-        print("\n📤 [1/3] Enviando dados do paciente...")
-        patient_msg = patient_data.format_message()
-        if not self._send_protocol_message(patient_msg):
-            print("❌ Falha ao enviar dados do paciente")
-            return False
-        print(f"✅ Dados enviados:\n{patient_msg}")
-        time.sleep(0.5)
-        
-        # Passo 2: Enviar tipo de tarefa
-        print(f"\n📤 [2/3] Enviando tarefa: {task_type.value}")
-        task_msg = f'Tarefa:\n"{task_type.value}"'
-        if not self._send_protocol_message(task_msg):
-            print("❌ Falha ao enviar tarefa")
-            return False
-        print(f"✅ Tarefa enviada: {task_type.value}")
-        time.sleep(0.5)
-        
-        # Passo 3: Aguardar confirmação (implementado via callback)
-        print("\n⏳ [3/3] Aguardando confirmação do VR...")
-        self.session.patient = patient_data
-        self.session.task_type = task_type
-        self.session.waiting_confirmation = True
-        
-        print("="*60)
-        print("✅ Sessão configurada - Aguardando confirmação do VR")
-        print("="*60 + "\n")
-        
-        return True
-    
-    def send_trigger(self) -> bool:
-        """
-        Envia comando de trigger para iniciar a tarefa no VR
-        Deve ser chamado após receber confirmação do VR
-        """
-        if not self.session.is_active and not self.session.waiting_confirmation:
-            print("❌ Erro: Nenhuma sessão aguardando trigger")
-            return False
-        
-        print("\n🎯 Enviando TRIGGER para iniciar tarefa...")
-        if self._send_protocol_message(TriggerCommand.START.value):
-            self.session.is_active = True
-            self.session.waiting_confirmation = False
-            print("✅ Trigger enviado - Tarefa iniciada no VR")
-            return True
-        
-        print("❌ Falha ao enviar trigger")
-        return False
-    
-    def send_hand_close(self, side: str) -> bool:
-        """
-        Envia comando de fechar mão (LEFT ou RIGHT)
-        Args:
-            side: "left", "right", "esquerda" ou "direita"
-        """
-        if not self.session.is_active:
-            print("❌ Erro: Sessão não está ativa")
-            return False
-        
-        # Normalizar entrada
-        side_normalized = side.lower()
-        if side_normalized in ['left', 'esquerda']:
-            command = ActionCommand.LEFT_HAND_CLOSE.value
-            side_label = "ESQUERDA"
-        elif side_normalized in ['right', 'direita']:
-            command = ActionCommand.RIGHT_HAND_CLOSE.value
-            side_label = "DIREITA"
-        else:
-            print(f"❌ Erro: Lado inválido '{side}'")
-            return False
-        
-        print(f"\n✊ Enviando comando: Fechar mão {side_label}")
-        if self._send_protocol_message(command):
-            print(f"✅ Comando enviado: {command}")
-            return True
-        
-        print(f"❌ Falha ao enviar comando")
-        return False
-    
-    def send_flower_action(self, side: str) -> bool:
-        """
-        Envia comando de ação de flor (LEFT_FLOWER ou RIGHT_FLOWER)
-        Args:
-            side: "left", "right", "esquerda" ou "direita"
-        """
-        if not self.session.is_active:
-            print("❌ Erro: Sessão não está ativa")
-            return False
-        
-        # Normalizar entrada
-        side_normalized = side.lower()
-        if side_normalized in ['left', 'esquerda']:
-            command = ActionCommand.LEFT_FLOWER.value
-            side_label = "ESQUERDA"
-        elif side_normalized in ['right', 'direita']:
-            command = ActionCommand.RIGHT_FLOWER.value
-            side_label = "DIREITA"
-        else:
-            print(f"❌ Erro: Lado inválido '{side}'")
-            return False
-        
-        print(f"\n🌸 Enviando comando: Flor {side_label}")
-        if self._send_protocol_message(command):
-            print(f"✅ Comando enviado: {command}")
-            return True
-        
-        print(f"❌ Falha ao enviar comando")
-        return False
-    
-    def end_session(self, message: Optional[str] = None) -> bool:
-        """
-        Finaliza a sessão atual enviando comando de finalização
-        Args:
-            message: Mensagem opcional para enviar junto com a finalização
-                    Se None, usa mensagem padrão de encorajamento
-        """
-        if not self.session.is_active:
-            print("❌ Erro: Nenhuma sessão ativa para finalizar")
-            return False
-        
-        print("\n" + "="*60)
-        print("🏁 FINALIZANDO SESSÃO VR")
-        print("="*60)
-        
-        # Determinar comando de finalização baseado no tipo de tarefa
-        if self.session.task_type == TaskType.TREINO:
-            end_command = EndTaskCommand.END_TRAINING.value
-            task_name = "TREINO"
-        elif self.session.task_type == TaskType.JOGO:
-            end_command = EndTaskCommand.END_GAME.value
-            task_name = "JOGO"
-        else:
-            print("❌ Erro: Tipo de tarefa desconhecido")
-            return False
-        
-        # Usar mensagem padrão se nenhuma for fornecida
-        if message is None:
-            message = "Parabens voce esta mandando muito bem"
-        
-        # Enviar comando de finalização
-        print(f"\n📤 Enviando comando de finalização: {task_name}")
-        final_msg = f"{end_command}\nEND_TASK, \"{message}\""
-        
-        if self._send_protocol_message(final_msg):
-            print(f"✅ Comando de finalização enviado")
-            self.session.is_active = False
-            self.session.waiting_confirmation = True  # Aguardar confirmação de finalização
-            print("\n⏳ Aguardando confirmação de finalização do VR...")
-            print("="*60 + "\n")
-            return True
-        
-        print("❌ Falha ao enviar comando de finalização")
-        return False
-    
-    def _send_protocol_message(self, message: str) -> bool:
-        """
-        Envia mensagem seguindo o protocolo (via ZMQ e TCP)
-        Método interno usado pelos métodos públicos do protocolo
-        """
-        if not self.is_active:
-            return False
-        
-        success = False
-        
-        # Enviar via ZMQ
-        if self.zmq_socket:
-            try:
-                self.zmq_socket.send_string(message)
-                success = True
-            except Exception as e:
-                print(f"⚠️ [ZMQ] Erro ao enviar: {e}")
-        
-        # Enviar via TCP (prioritário)
-        if self.tcp_connected and self.tcp_connection:
-            try:
-                encoded_msg = message + '\n'
-                self.tcp_connection.sendall(encoded_msg.encode('utf-8'))
-                success = True
-            except Exception as e:
-                print(f"⚠️ [TCP] Erro ao enviar: {e}")
-                self.tcp_connected = False
-                if self.on_connection_changed:
-                    self.on_connection_changed(False)
-        
-        return success
-    
-    # ========================================================================
-    # MÉTODOS LEGADOS (mantidos para compatibilidade)
-    # ========================================================================
-    
+
+        print("Servidor parado e recursos limpos", flush=True)
+
     def send_command(self, command: str) -> bool:
         """
         Envia comando para Unity via ZMQ e TCP
+        Garante que toda mensagem termina com newline
         Retorna True se enviado com sucesso
         """
         if not self.is_active:
-            print("Servidor não está ativo")
+            print("Servidor não está ativo", flush=True)
             return False
-            
+
+        # Garantir que a mensagem termina com newline
+        if not command.endswith('\n'):
+            command = command + '\n'
+
         success = False
-        
+
+        # DEBUG: mostra a payload completa que será enviada
+        try:
+            print(f"[SEND_COMMAND] Preparando para enviar (len={len(command)}): {command!r}", flush=True)
+        except Exception:
+            print("[SEND_COMMAND] Preparando para enviar (impossível exibir payload)", flush=True)
+
         # Enviar via ZMQ (sempre disponível quando servidor ativo)
         if self.zmq_socket:
             try:
-                self.zmq_socket.send_string(command)
-                print(f"[ZMQ] Comando enviado: {command}")
+                # ZMQ geralmente trabalha sem newline, mas enviamos mesmo assim (rstrip para visual)
+                self.zmq_socket.send_string(command.rstrip('\n'))
+                print(f"[ZMQ] Comando enviado: {command.rstrip()}", flush=True)
                 success = True
             except Exception as e:
-                print(f"[ZMQ] Erro ao enviar: {e}")
-        
+                print(f"[ZMQ] Erro ao enviar: {e}", flush=True)
+
         # Enviar via TCP se conectado
         if self.tcp_connected and self.tcp_connection:
             try:
-                message = command + '\n'
-                self.tcp_connection.sendall(message.encode('utf-8'))
-                print(f"[TCP] Comando enviado: {command}")
+                self.tcp_connection.sendall(command.encode('utf-8'))
+                print(f"[TCP] Comando enviado: {command.rstrip()}", flush=True)
                 success = True
             except Exception as e:
-                print(f"[TCP] Erro ao enviar: {e}")
+                print(f"[TCP] Erro ao enviar: {e}", flush=True)
                 self.tcp_connected = False
                 if self.on_connection_changed:
                     self.on_connection_changed(False)
-        
+
         return success
-    
+
+    def _send_protocol_message(self, message: str) -> bool:
+        """
+        Método legado para compatibilidade com testes anteriores
+        Alias para send_command
+        """
+        return self.send_command(message)
+
     def send_hand_command(self, hand: str) -> bool:
         """
         Envia comando de mão (direita/esquerda)
@@ -497,9 +366,9 @@ class UnityCommunicator:
         elif hand.lower() in ['esquerda', 'left']:
             return self.send_command("LEFT_HAND_CLOSE")
         else:
-            print(f"Comando de mão inválido: {hand}")
+            print(f"Comando de mão inválido: {hand}", flush=True)
             return False
-    
+
     def send_trigger_command(self, hand: str) -> bool:
         """
         Envia comando de trigger
@@ -509,34 +378,249 @@ class UnityCommunicator:
         elif hand.lower() in ['esquerda', 'left']:
             return self.send_command("TRIGGER_LEFT")
         else:
-            print(f"Comando de trigger inválido: {hand}")
+            print(f"Comando de trigger inválido: {hand}", flush=True)
             return False
-    
+
+    # ========================================================================
+    # NOVO PROTOCOLO - MÉTODOS DE SESSÃO E TAREFA
+    # ========================================================================
+    def start_session(self, patient: PatientData, task_type: TaskType) -> bool:
+        """
+        Inicia uma nova sessão com paciente e tipo de tarefa
+        Envia dados do paciente e tipo de tarefa ao VR
+        """
+        if not self.is_active:
+            print("Erro: Servidor não está ativo", flush=True)
+            return False
+
+        if not self.tcp_connected:
+            print("Erro: VR não está conectado", flush=True)
+            return False
+
+        # Validar paciente
+        try:
+            if not isinstance(patient, PatientData):
+                raise ValueError("Paciente deve ser uma instância de PatientData")
+        except Exception as e:
+            print(f"Erro ao validar paciente: {e}", flush=True)
+            return False
+
+        # Atualizar estado da sessão
+        self.session.patient = patient
+        self.session.task_type = task_type
+        self.session.waiting_confirmation = True
+
+        # 1. Enviar dados do paciente em formato JSON
+        print(f"\n📋 Enviando dados do paciente (JSON)...", flush=True)
+        import json
+        patient_json = json.dumps({
+            "nome": patient.nome,
+            "nivel": patient.nivel,
+            "lado": patient.lado
+        })
+        # debug explícito antes de enviar
+        print(f"[START_SESSION] JSON do paciente a ser enviado: {patient_json}", flush=True)
+
+        if not self.send_command(patient_json):
+            print("Erro ao enviar dados do paciente", flush=True)
+            self.session.reset()
+            return False
+
+        time.sleep(0.3)  # Pequeno delay entre mensagens
+
+        # 2. Enviar tipo de tarefa
+        print(f"📌 Enviando tipo de tarefa: {task_type.value}", flush=True)
+        if not self.send_command(task_type.value):
+            print("Erro ao enviar tipo de tarefa", flush=True)
+            self.session.reset()
+            return False
+
+        print("✅ Sessão iniciada com sucesso", flush=True)
+        return True
+
+    def send_trigger(self) -> bool:
+        """
+        Envia trigger para iniciar tarefa no VR
+        Envia TRIGGER_LEFT ou TRIGGER_RIGHT conforme o lado do paciente
+        """
+        if not self._is_session_active_for_commands():
+            print("Erro: Sessão não está ativa para enviar trigger", flush=True)
+            return False
+
+        # Determinar qual trigger enviar baseado no lado do paciente
+        trigger_cmd = "TRIGGER_RIGHT" if self.session.patient.lado == "Direito" else "TRIGGER_LEFT"
+        print(f"🎯 Enviando trigger: {trigger_cmd}", flush=True)
+        
+        if not self.send_command(trigger_cmd):
+            return False
+
+        time.sleep(0.2)
+
+        # Enviar comando de fechar mão baseado no lado do paciente
+        hand_command = ActionCommand.RIGHT_HAND_CLOSE if self.session.patient.lado == "Direito" else ActionCommand.LEFT_HAND_CLOSE
+        print(f"👋 Enviando comando: {hand_command.value}", flush=True)
+
+        success = self.send_command(hand_command.value)
+
+        if success:
+            self.session.is_active = True
+            self.session.waiting_confirmation = False
+
+        return success
+
+    def send_hand_close(self, lado: str) -> bool:
+        """
+        Envia comando de fechar mão para o lado especificado
+        Compatível com novo protocolo
+        """
+        if not self._is_session_active_for_commands():
+            print("Erro: Sessão não está ativa", flush=True)
+            return False
+
+        if lado.lower() in ['direita', 'right']:
+            return self.send_command(ActionCommand.RIGHT_HAND_CLOSE.value)
+        elif lado.lower() in ['esquerda', 'left']:
+            return self.send_command(ActionCommand.LEFT_HAND_CLOSE.value)
+        else:
+            print(f"Lado inválido: {lado}", flush=True)
+            return False
+
+    def send_hand_open(self, lado: str) -> bool:
+        """
+        Envia comando de abrir mão para o lado especificado
+        Compatível com novo protocolo - libera a mão do gatilho
+        """
+        if not self.is_active:
+            print("Erro: Servidor não está ativo", flush=True)
+            return False
+
+        if lado.lower() in ['direita', 'right']:
+            return self.send_command("RIGHT_HAND_OPEN")
+        elif lado.lower() in ['esquerda', 'left']:
+            return self.send_command("LEFT_HAND_OPEN")
+        else:
+            print(f"Lado inválido: {lado}", flush=True)
+            return False
+
+    def send_flower_action(self, lado: str) -> bool:
+        """
+        Envia comando de ação de flor
+        (simulação de resposta do VR)
+        """
+        if lado.lower() in ['direita', 'right']:
+            return self.send_command(ActionCommand.RIGHT_FLOWER.value)
+        elif lado.lower() in ['esquerda', 'left']:
+            return self.send_command(ActionCommand.LEFT_FLOWER.value)
+        else:
+            print(f"Lado inválido: {lado}", flush=True)
+            return False
+
+    def end_task(self, message: str = "") -> bool:
+        """
+        Finaliza a tarefa atual (Treino ou Jogo)
+        Envia END_TASK conforme protocolo Unity
+        
+        Uso:
+        - Treino: end_task() -> finaliza tarefa de treino
+        - Jogo: end_task() -> finaliza tarefa de jogo, depois chamar end_session(mensagem)
+        
+        Formato: "END_TASK" ou "END_TASK,mensagem"
+        """
+        if not self.session.is_active:
+            print("Erro: Nenhuma tarefa ativa para finalizar", flush=True)
+            return False
+
+        if not self.tcp_connected:
+            print("Erro: VR não está conectado", flush=True)
+            return False
+
+        # Construir mensagem conforme o protocolo do Unity
+        if message:
+            end_message = f"END_TASK,{message}"
+        else:
+            end_message = "END_TASK"
+
+        print(f"✋ Finalizando tarefa: {end_message}", flush=True)
+
+        success = self.send_command(end_message)
+
+        if success:
+            # Marca tarefa como não ativa, mas mantém sessão configurada
+            # para permitir end_session() após end_task() em modo jogo
+            self.session.is_active = False
+
+        return success
+
+    def end_session(self, message: str = "") -> bool:
+        """
+        Finaliza a sessão com mensagem motivacional
+        Usado após end_task() para encerrar sessão de jogo/treino
+        
+        Envia END_SESSION,<mensagem motivacional> ao VR
+        
+        Exemplo de uso:
+        - end_task()  # Finaliza a tarefa
+        - end_session("Parabéns! Você acertou tudo!")  # Envia mensagem motivacional
+        """
+        if not self.tcp_connected:
+            print("Erro: VR não está conectado", flush=True)
+            return False
+
+        # Se não houver mensagem, usa mensagem padrão
+        if not message:
+            message = "Sessão finalizada"
+
+        end_message = f"END_SESSION,{message}"
+
+        print(f"🎉 Finalizando sessão com mensagem: {end_message}", flush=True)
+
+        success = self.send_command(end_message)
+
+        if success:
+            self.session.reset()
+
+        return success
+
+    def set_confirmation_callback(self, callback: Callable[[], None]):
+        """Define callback para confirmação do VR"""
+        self.on_confirmation = callback
+
+    def set_flower_callback(self, callback: Callable[[ActionCommand], None]):
+        """Define callback para ações de flor do VR"""
+        self.on_flower_action = callback
+
+    def _is_session_active_for_commands(self) -> bool:
+        """
+        Verifica se sessão está ativa e pronta para comandos
+        Retorna True se: servidor ativo, VR conectado e sessão ativa
+        """
+        return (self.is_active and
+                self.tcp_connected and
+                self.session.patient is not None and
+                self.session.task_type is not None)
+
     def _broadcast_ips(self):
         """
-        Thread para broadcast dos IPs via UDP com header "Confirm"
-        Conforme protocolo: Broadcast UDP com header "Confirm"
+        Thread para broadcast dos IPs via UDP
         """
         ips = self.get_all_ips()
-        # Formatar mensagem com header "Confirm" conforme protocolo
-        message_content = ','.join(ips)
-        message = f"{self.CONFIRM_HEADER}:{message_content}".encode('utf-8')
-        
+        message = ','.join(ips).encode('utf-8')
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        
-        print(f"[UDP] Iniciando broadcast com header '{self.CONFIRM_HEADER}': {ips}")
-        
+
+        print(f"[UDP] Iniciando broadcast: {ips}", flush=True)
+
         try:
             while not self.stop_event.is_set():
+                # Enviar lista de IPs para descoberta
                 sock.sendto(message, ('<broadcast>', self.UDP_PORT))
                 time.sleep(self.BROADCAST_INTERVAL)
         except Exception as e:
-            print(f"[UDP] Erro no broadcast: {e}")
+            print(f"[UDP] Erro no broadcast: {e}", flush=True)
         finally:
             sock.close()
-            print("[UDP] Broadcast parado")
-    
+            print("[UDP] Broadcast parado", flush=True)
+
     def _tcp_server(self):
         """
         Thread para servidor TCP
@@ -544,23 +628,23 @@ class UnityCommunicator:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.settimeout(1.0)  # Timeout para permitir verificação de stop_event
-        
+
         try:
             sock.bind(('', self.TCP_PORT))
             sock.listen(1)
-            print(f"[TCP] Servidor ouvindo na porta {self.TCP_PORT}")
-            
+            print(f"[TCP] Servidor ouvindo na porta {self.TCP_PORT}", flush=True)
+
             while not self.stop_event.is_set():
                 try:
                     conn, addr = sock.accept()
-                    print(f"[TCP] Unity conectado de {addr}")
-                    
+                    print(f"[TCP] Unity conectado de {addr}", flush=True)
+
                     self.tcp_connection = conn
                     self.tcp_connected = True
-                    
+
                     if self.on_connection_changed:
                         self.on_connection_changed(True)
-                    
+
                     # Iniciar thread para lidar com esta conexão
                     self.tcp_handler_thread = threading.Thread(
                         target=self._handle_tcp_connection,
@@ -568,148 +652,245 @@ class UnityCommunicator:
                         daemon=True
                     )
                     self.tcp_handler_thread.start()
-                    
+
                     # Aguardar conexão terminar antes de aceitar nova
                     self.tcp_handler_thread.join()
-                    
+
                 except socket.timeout:
                     continue
                 except Exception as e:
                     if not self.stop_event.is_set():
-                        print(f"[TCP] Erro no servidor: {e}")
+                        print(f"[TCP] Erro no servidor: {e}", flush=True)
                     break
-                    
+
         except Exception as e:
-            print(f"[TCP] Erro ao iniciar servidor: {e}")
+            print(f"[TCP] Erro ao iniciar servidor: {e}", flush=True)
         finally:
             sock.close()
-            print("[TCP] Servidor TCP parado")
-    
+            print("[TCP] Servidor TCP parado", flush=True)
+
     def _handle_tcp_connection(self, conn: socket.socket, addr):
         """
         Lida com uma conexão TCP específica
-        Processa mensagens do VR incluindo confirmações
+        Processa mensagens do VR e dispara callbacks apropriados
         """
         try:
             conn.settimeout(1.0)
-            
+
             while not self.stop_event.is_set() and self.tcp_connected:
                 try:
                     data = conn.recv(self.BUFFER_SIZE)
                     if not data:
-                        print("[TCP] Unity desconectou")
+                        print("[TCP] Unity desconectou", flush=True)
                         break
-                        
+
                     message = data.decode('utf-8', errors='ignore').strip()
-                    
-                    # Processar mensagem recebida
+                    print(f"[TCP] Recebido: {message}", flush=True)
+
+                    # Processar mensagens do novo protocolo
                     self._process_vr_message(message)
-                    
-                    # Callback genérico
+
+                    # Callback genérico (compatibilidade)
                     if self.on_message_received:
                         self.on_message_received(message)
-                        
+
                 except socket.timeout:
                     continue
                 except Exception as e:
-                    print(f"[TCP] Erro na recepção: {e}")
+                    print(f"[TCP] Erro na recepção: {e}", flush=True)
                     break
-                    
+
         finally:
             try:
                 conn.close()
             except Exception:
                 pass
-            
+
+            # reset flag para próxima conexão
+            self._sent_session_info = False
+
             self.tcp_connection = None
             self.tcp_connected = False
-            
+
             if self.on_connection_changed:
                 self.on_connection_changed(False)
-            
-            print("[TCP] Conexão encerrada")
-    
+
+            print("[TCP] Conexão encerrada", flush=True)
+
     def _process_vr_message(self, message: str):
         """
-        Processa mensagens recebidas do VR conforme protocolo
+        Processa mensagens recebidas do VR conforme o protocolo
+        Mensagens esperadas:
+        - "WRONG" - Ação errada do usuário
+        - "LEFT_FLOWER" / "RIGHT_FLOWER" - Flor acionada
+        - "confirm_end" / "Confirmar_finalização" - Confirmação de fim (MELHORADO)
+        - "B;HEADER;..." ou "HEADER" - header inicial enviado pelo Unity (gatilho para auto-send)
+        - "Treino" / "Jogo" - Confirmação de tipo de tarefa (NOVO)
         """
-        message_lower = message.lower().strip()
-        
-        # Detectar confirmação de inicialização
-        if "confirm" in message_lower and self.session.waiting_confirmation:
-            print("\n" + "="*60)
-            print("✅ CONFIRMAÇÃO RECEBIDA DO VR")
-            print("="*60)
-            print("📥 VR está pronto e confirmou recebimento dos dados")
-            print("🎯 Aguardando trigger para iniciar a tarefa...")
-            print("="*60 + "\n")
-            
-            if self.on_confirmation_received:
-                self.on_confirmation_received()
-        
-        # Detectar confirmação de finalização
-        elif ("finalizar" in message_lower or "end" in message_lower) and self.session.waiting_confirmation:
-            print("\n" + "="*60)
-            print("✅ CONFIRMAÇÃO DE FINALIZAÇÃO RECEBIDA")
-            print("="*60)
-            print("📥 VR confirmou finalização da sessão")
-            
-            # Resetar estado da sessão
-            self.session.patient = None
-            self.session.task_type = None
+        msg_lower = message.lower().strip()
+
+        # Reconhecer header enviado pelo Unity (ex: B;HEADER;0;;E ou HEADER)
+        if "header" in msg_lower or message.strip().upper().startswith("B;HEADER"):
+            print(f"✅ VR enviou HEADER (gatilho para envio de sessão): {message}", flush=True)
+            # envia automaticamente os dados do paciente caso existam
+            try:
+                self._auto_send_session_info()
+            except Exception as e:
+                print(f"[PROCESS] Erro ao auto-enviar session info: {e}", flush=True)
+            return
+
+        # Reconhecer "WRONG" - erro na ação
+        if msg_lower == "wrong":
+            print("⚠️  VR registrou ação incorreta (WRONG)", flush=True)
+            return
+
+        # Reconhecer TRIGGER commands que o VR pode enviar como feedback
+        if msg_lower == "trigger_left":
+            print("🎯 VR enviou TRIGGER_LEFT (feedback)", flush=True)
+            return
+
+        if msg_lower == "trigger_right":
+            print("🎯 VR enviou TRIGGER_RIGHT (feedback)", flush=True)
+            return
+
+        # Reconhecer ações de flor
+        if "left_flower" in msg_lower:
+            print("🌸 VR acionou FLOR ESQUERDA", flush=True)
+            if self.on_flower_action:
+                self.on_flower_action(ActionCommand.LEFT_FLOWER)
+            return
+
+        if "right_flower" in msg_lower:
+            print("🌸 VR acionou FLOR DIREITA", flush=True)
+            if self.on_flower_action:
+                self.on_flower_action(ActionCommand.RIGHT_FLOWER)
+            return
+
+        # Reconhecer confirmação de finalização - MELHORADO: mais explícito
+        if msg_lower == "confirm_end" or msg_lower == "confirmar_finalização" or "confirm" in msg_lower:
+            print("✅ VR confirmou recebimento/finalização!", flush=True)
+            if self.on_confirmation:
+                try:
+                    self.on_confirmation()
+                except Exception as e:
+                    print(f"[PROCESS] Erro em on_confirmation callback: {e}", flush=True)
+            # marca sessão inativa (se aplicável)
             self.session.is_active = False
+            return
+
+        # Reconhecer tipo de tarefa confirmado pelo VR - NOVO
+        if msg_lower == "treino" or msg_lower == "jogo":
+            print(f"[TAREFA] VR confirmou tipo de tarefa: {msg_lower.upper()}", flush=True)
+            return
+
+        # Log genérico para mensagens não reconhecidas
+        if message.strip():
+            print(f"📨 Mensagem VR não reconhecida: {message}", flush=True)
+
+    def _auto_send_session_info(self):
+        """
+        Envia automaticamente (uma vez) as informações da sessão ao VR:
+        1) JSON do paciente (se existir)
+        2) fallback legível (format_message)
+        3) tipo de tarefa (TaskType.value)
+        Gatilho: chamado quando o VR envia 'HEADER' ou 'confirm'.
+        Caso nenhum paciente esteja configurado, usa debug padrão (João, nível 5, esquerdo).
+        """
+        try:
+            # evita reenvio
+            if getattr(self, "_sent_session_info", False):
+                print("[AUTO_SEND] Já enviou informações desta sessão (ignora).", flush=True)
+                return
+
+            if not self.session:
+                print("[AUTO_SEND] Sessão não inicializada. Não envia.", flush=True)
+                return
+
+            # Se não houver paciente ou tarefa, usa debug padrão
+            if not self.session.patient or not self.session.task_type:
+                print("[AUTO_SEND] ⚙️  Usando paciente de DEBUG padrão (João, nível 5, esquerdo)", flush=True)
+                self.session.patient = PatientData(nome="João", nivel=5, lado="Esquerdo")
+                self.session.task_type = TaskType.TREINO
+                print("[AUTO_SEND] Sessão configurada com valores de debug", flush=True)
+
+            # marca como enviado imediatamente para evitar race
+            self._sent_session_info = True
+
+            import json
+            # 1) JSON (moderno)
+            try:
+                patient_json = self.session.patient.to_json() if hasattr(self.session.patient, "to_json") else json.dumps({
+                    "nome": self.session.patient.nome,
+                    "nivel": self.session.patient.nivel,
+                    "lado": self.session.patient.lado
+                })
+                print(f"[AUTO_SEND] Enviando paciente (JSON): {patient_json}", flush=True)
+                sent_json = self.send_command(patient_json)
+                print(f"[AUTO_SEND] send_command(JSON) -> {sent_json}", flush=True)
+            except Exception as e:
+                print(f"[AUTO_SEND] Erro ao montar/enviar JSON: {e}", flush=True)
+
+            # pequeno intervalo para ordenar pacotes
+            time.sleep(0.12)
+
+            # 2) Fallback legível (compatibilidade)
+            try:
+                formatted = self.session.patient.format_message()
+                print(f"[AUTO_SEND] Enviando paciente (legível): {formatted!r}", flush=True)
+                sent_f = self.send_command(formatted)
+                print(f"[AUTO_SEND] send_command(formatted) -> {sent_f}", flush=True)
+            except Exception as e:
+                print(f"[AUTO_SEND] Erro ao enviar formato legível: {e}", flush=True)
+
+            time.sleep(0.12)
+
+            # 3) Tipo de tarefa
+            try:
+                print(f"[AUTO_SEND] Enviando tipo de tarefa: {self.session.task_type.value}", flush=True)
+                sent_t = self.send_command(self.session.task_type.value)
+                print(f"[AUTO_SEND] send_command(task_type) -> {sent_t}", flush=True)
+            except Exception as e:
+                print(f"[AUTO_SEND] Erro ao enviar tipo de tarefa: {e}", flush=True)
+
+            # após envio, se quiser marcar sessão como aguardando confirmação:
             self.session.waiting_confirmation = False
-            
-            print("🏁 Sessão encerrada com sucesso")
-            print("="*60 + "\n")
-        
-        # Log de outras mensagens
-        else:
-            print(f"[TCP] 📨 Mensagem do VR: {message}")
-    
+            print("[AUTO_SEND] Informações da sessão enviadas automaticamente.", flush=True)
+        except Exception as e:
+            print(f"[AUTO_SEND] Exceção geral: {e}", flush=True)
+
     def set_message_callback(self, callback: Callable[[str], None]):
         """Define callback para mensagens recebidas"""
         self.on_message_received = callback
-    
+
     def set_connection_callback(self, callback: Callable[[bool], None]):
         """Define callback para mudanças de conexão"""
         self.on_connection_changed = callback
-    
-    def set_confirmation_callback(self, callback: Callable[[], None]):
-        """Define callback para confirmações do VR"""
-        self.on_confirmation_received = callback
 
 
-# ============================================================================
-# CLASSES DE COMPATIBILIDADE COM CÓDIGO LEGADO
-# ============================================================================
-
+# Classe para compatibilidade com código existente
 class UDP_sender:
-    """
-    Classe de compatibilidade que mapeia para UnityCommunicator
-    Mantém API legada enquanto usa o novo protocolo internamente
-    """
-    
+    """Classe de compatibilidade que mapeia para UnityCommunicator"""
+
     _communicator = UnityCommunicator()
     # simple debounce state to avoid duplicate rapid sends
     _last_sent_times = {}
     _debounce_seconds = 0.2  # ignore same action within 200 ms
-    
+
     @classmethod
     def init_zmq_socket(cls, broadcast_duration=3.0):
         """Inicializa o sistema de comunicação"""
         return cls._communicator.start_server()
-    
+
     @classmethod
     def stop_zmq_socket(cls):
         """Para o sistema de comunicação"""
         cls._communicator.stop_server()
-    
+
     @classmethod
     def enviar_sinal(cls, action: str) -> bool:
         """
-        Envia sinal de ação (método legado)
-        Agora usa os métodos do protocolo quando possível
+        Envia sinal de ação
+        Compatível com chamadas legadas
         """
         # debounce: avoid sending the same action repeatedly in a short window
         try:
@@ -718,73 +899,40 @@ class UDP_sender:
             last = cls._last_sent_times.get(key)
             if last is not None and (now - last) < cls._debounce_seconds:
                 # skip duplicate
-                print(f"Debounce: skipping duplicate action '{action}' (last sent {now-last:.3f}s ago)")
+                print(f"Debounce: pulando ação duplicada '{action}' (últim envio há {now-last:.3f}s)", flush=True)
                 return False
             cls._last_sent_times[key] = now
         except Exception:
             # if anything goes wrong in debounce, proceed to send (fail-open)
             pass
-        
-        # Mapear ações legadas para novos métodos do protocolo
-        action_lower = action.lower()
-        
-        if action_lower in ['direita', 'right']:
-            return cls._communicator.send_hand_close('direita')
-        elif action_lower in ['esquerda', 'left']:
-            return cls._communicator.send_hand_close('esquerda')
-        elif action_lower in ['trigger_right', 'trigger']:
-            return cls._communicator.send_trigger()
-        elif action_lower == 'trigger_left':
-            return cls._communicator.send_trigger()
-        elif action_lower == 'left_flower':
-            return cls._communicator.send_flower_action('esquerda')
-        elif action_lower == 'right_flower':
-            return cls._communicator.send_flower_action('direita')
+
+        # Mapear ações legadas
+        if action.lower() == 'direita':
+            return cls._communicator.send_hand_command('direita')
+        elif action.lower() == 'esquerda':
+            return cls._communicator.send_hand_command('esquerda')
+        elif action.lower() == 'trigger_right':
+            return cls._communicator.send_trigger_command('direita')
+        elif action.lower() == 'trigger_left':
+            return cls._communicator.send_trigger_command('esquerda')
         else:
-            # Comando genérico - usar método legado
             return cls._communicator.send_command(action)
-    
+
     @classmethod
     def is_server_active(cls) -> bool:
         """Verifica se o servidor está ativo"""
         return cls._communicator.is_active
-    
+
     @classmethod
     def restart_broadcast(cls, duration=3.0):
         """Reinicia o broadcast (não necessário na nova implementação)"""
         return True  # Broadcast é contínuo na nova implementação
-    
-    # Métodos para usar o protocolo completo
-    @classmethod
-    def start_vr_session(cls, patient_name: str, level: int, affected_side: str, task: str) -> bool:
-        """
-        Inicia sessão VR usando o protocolo completo
-        Args:
-            patient_name: Nome do paciente
-            level: Nível do paciente (0-11)
-            affected_side: "Esquerdo" ou "Direito"
-            task: "Treino" ou "Jogo"
-        """
-        patient_data = PatientData(
-            nome=patient_name,
-            nivel=level,
-            lado=affected_side
-        )
-        
-        task_type = TaskType.TREINO if task.lower() == "treino" else TaskType.JOGO
-        
-        return cls._communicator.start_session(patient_data, task_type)
-    
-    @classmethod
-    def end_vr_session(cls, message: Optional[str] = None) -> bool:
-        """Finaliza sessão VR usando o protocolo"""
-        return cls._communicator.end_session(message)
-    
+
     # Métodos legacy mantidos para compatibilidade
     @staticmethod
     def get_all_ips():
         return UnityCommunicator.get_all_ips()
-    
+
     @staticmethod
     def get_local_ip():
         all_ips = UnityCommunicator.get_all_ips()
@@ -793,167 +941,62 @@ class UDP_sender:
                 return ip
         return all_ips[0] if all_ips else '127.0.0.1'
 
-# ============================================================================
-# FUNÇÃO PRINCIPAL PARA DEMONSTRAÇÃO E TESTES
-# ============================================================================
 
+# Função principal para demonstração
 def main():
-    """
-    Função principal para teste do sistema
-    Demonstra o uso completo do protocolo Sistema <-> VR
-    """
+
+    """Função principal para teste do sistema"""
     communicator = UnityCommunicator()
-    
+
     def on_message(message):
-        print(f"📨 Callback - Mensagem recebida: {message}")
-    
+        print(f"Mensagem recebida: {message}", flush=True)
+
     def on_connection(connected):
-        status = "🟢 Conectado" if connected else "🔴 Desconectado"
-        print(f"🔌 Callback - Conexão VR: {status}")
-    
-    def on_confirmation():
-        print("✅ Callback - Confirmação recebida!")
-    
+        print(f"Conexão: {'Conectado' if connected else 'Desconectado'}", flush=True)
+
     # Configurar callbacks
     communicator.set_message_callback(on_message)
     communicator.set_connection_callback(on_connection)
-    communicator.set_confirmation_callback(on_confirmation)
-    
+
     # Iniciar servidor
     if not communicator.start_server():
-        print("❌ Falha ao iniciar servidor")
+        print("Falha ao iniciar servidor", flush=True)
         return
-    
-    print("\n" + "="*70)
-    print(" SISTEMA DE COMUNICAÇÃO UNITY - PROTOCOLO COMPLETO IMPLEMENTADO")
-    print("="*70)
-    print("\n📋 COMANDOS DO PROTOCOLO:")
-    print("="*70)
-    print("\n🚀 Iniciar Sessão:")
-    print("  iniciar <nome> <nivel> <lado> <tarefa>")
-    print("  Exemplo: iniciar João 5 Direito Treino")
-    print("  (nivel: 0-11, lado: Esquerdo/Direito, tarefa: Treino/Jogo)")
-    print("\n🎯 Durante Sessão:")
-    print("  trigger          - Envia trigger para iniciar tarefa")
-    print("  fechar <lado>    - Fecha mão (esquerda/direita)")
-    print("  flor <lado>      - Ação de flor (esquerda/direita)")
-    print("\n🏁 Finalizar:")
-    print("  fim [mensagem]   - Finaliza sessão (mensagem opcional)")
-    print("\n💡 Comandos Gerais:")
-    print("  status           - Mostra estado atual")
-    print("  sair             - Encerra programa")
-    print("="*70 + "\n")
-    
+
+    print("\n" + "="*50, flush=True)
+    print("Sistema de Comunicação Unity Ativo", flush=True)
+    print("="*50, flush=True)
+    print("Comandos disponíveis:", flush=True)
+    print("  - direita       : Controla mão direita", flush=True)
+    print("  - esquerda      : Controla mão esquerda", flush=True)
+    print("  - trigger_right : Gatilho mão direita", flush=True)
+    print("  - trigger_left  : Gatilho mão esquerda", flush=True)
+    print("  - <comando>     : Comando personalizado", flush=True)
+    print("  - sair          : Encerra o programa", flush=True)
+    print("="*50, flush=True)
+
     try:
         while True:
-            comando = input("\n> ").strip()
-            
-            if not comando:
-                continue
-            
-            parts = comando.split(maxsplit=1)
-            cmd = parts[0].lower()
-            args = parts[1] if len(parts) > 1 else ""
-            
-            # Comando: sair
-            if cmd == 'sair':
-                print("\n👋 Encerrando...")
+            comando = input("\nDigite um comando: ").strip()
+
+            if comando.lower() == 'sair':
                 break
-            
-            # Comando: status
-            elif cmd == 'status':
-                print("\n📊 ESTADO DO SISTEMA:")
-                print(f"  Servidor ativo: {communicator.is_active}")
-                print(f"  VR conectado: {communicator.tcp_connected}")
-                print(f"  Sessão ativa: {communicator.session.is_active}")
-                print(f"  Aguardando confirmação: {communicator.session.waiting_confirmation}")
-                if communicator.session.patient:
-                    print(f"  Paciente: {communicator.session.patient.nome}")
-                    print(f"  Nível: {communicator.session.patient.nivel}")
-                    print(f"  Lado: {communicator.session.patient.lado}")
-                if communicator.session.task_type:
-                    print(f"  Tarefa: {communicator.session.task_type.value}")
-            
-            # Comando: iniciar sessão
-            elif cmd == 'iniciar':
-                try:
-                    parts = args.split()
-                    if len(parts) < 4:
-                        print("❌ Uso: iniciar <nome> <nivel> <lado> <tarefa>")
-                        print("   Exemplo: iniciar João 5 Direito Treino")
-                        print("   Nível: 0-11")
-                        continue
-                    
-                    nome = parts[0]
-                    try:
-                        nivel = int(parts[1])
-                        if not (0 <= nivel <= 11):
-                            print("❌ Nível deve ser um número entre 0 e 11")
-                            continue
-                    except ValueError:
-                        print("❌ Nível deve ser um número inteiro (0-11)")
-                        continue
-                    
-                    lado = parts[2].capitalize()
-                    tarefa = parts[3].capitalize()
-                    
-                    if lado not in ["Esquerdo", "Direito"]:
-                        print("❌ Lado deve ser 'Esquerdo' ou 'Direito'")
-                        continue
-                    
-                    if tarefa not in ["Treino", "Jogo"]:
-                        print("❌ Tarefa deve ser 'Treino' ou 'Jogo'")
-                        continue
-                    
-                    patient_data = PatientData(nome=nome, nivel=nivel, lado=lado)
-                    task_type = TaskType.TREINO if tarefa == "Treino" else TaskType.JOGO
-                    
-                    communicator.start_session(patient_data, task_type)
-                    
-                except Exception as e:
-                    print(f"❌ Erro ao iniciar sessão: {e}")
-            
-            # Comando: trigger
-            elif cmd == 'trigger':
-                communicator.send_trigger()
-            
-            # Comando: fechar mão
-            elif cmd == 'fechar':
-                if not args:
-                    print("❌ Especifique o lado: fechar esquerda|direita")
-                else:
-                    communicator.send_hand_close(args.lower())
-            
-            # Comando: flor
-            elif cmd == 'flor':
-                if not args:
-                    print("❌ Especifique o lado: flor esquerda|direita")
-                else:
-                    communicator.send_flower_action(args.lower())
-            
-            # Comando: fim
-            elif cmd == 'fim':
-                message = args if args else None
-                communicator.end_session(message)
-            
-            # Comandos legados (compatibilidade)
-            elif cmd == 'direita':
-                communicator.send_hand_close('direita')
-            elif cmd == 'esquerda':
-                communicator.send_hand_close('esquerda')
-            
-            # Comando desconhecido
-            else:
-                print(f"⚠️  Comando desconhecido: '{cmd}'")
-                print("   Digite 'sair' para ver todos os comandos disponíveis")
-                
+            elif comando.lower() == 'direita':
+                communicator.send_hand_command('direita')
+            elif comando.lower() == 'esquerda':
+                communicator.send_hand_command('esquerda')
+            elif comando.lower() == 'trigger_right':
+                communicator.send_trigger_command('direita')
+            elif comando.lower() == 'trigger_left':
+                communicator.send_trigger_command('esquerda')
+            elif comando:
+                communicator.send_command(comando)
+
     except KeyboardInterrupt:
-        print("\n\n⚠️  Interrompido pelo usuário")
-    except Exception as e:
-        print(f"\n❌ Erro: {e}")
+        print("\nInterrompido pelo usuário", flush=True)
     finally:
         communicator.stop_server()
-        print("\n✅ Programa encerrado\n")
+        print("Programa encerrado", flush=True)
 
 
 if __name__ == '__main__':
