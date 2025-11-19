@@ -15,62 +15,13 @@ from database.manager import DatabaseManager
 from acquisition.streaming_thread import StreamingThread
 from config.settings import get_recording_path
 from gui.widgets.eeg_plot import EEGPlotWidget
- # Prefer using HardThinking TensorFlow adapter for models
+
+# Import TensorFlow adapter from brainbridge_v2
 try:
-    import importlib, sys
-    # Robustly search for HardThinking/src: check current file tree and then parents
-    p = Path(__file__).resolve()
-    ht_src = None
-    # first check the current file ancestors including the folder that contains the project
-    candidates_to_check = [p]
-    # climb up a reasonable number of levels (6) from the current file
-    for _ in range(6):
-        candidates_to_check.append(candidates_to_check[-1].parent)
-
-    for base in candidates_to_check:
-        candidate = base / 'HardThinking' / 'src'
-        if candidate.exists():
-            ht_src = str(candidate)
-            break
-
-    # As a fallback, also check the resolved parent chain (covers some execution contexts)
-    if ht_src is None:
-        for parent in p.resolve().parents:
-            candidate = parent / 'HardThinking' / 'src'
-            if candidate.exists():
-                ht_src = str(candidate)
-                break
-
-    if ht_src:
-        # ensure both the src folder and its parent (HardThinking) are on sys.path
-        ht_path = Path(ht_src)
-        ht_parent = ht_path.parent
-        for pth in (str(ht_path), str(ht_parent)):
-            if pth not in sys.path:
-                sys.path.insert(0, pth)
-
-    # Try several possible module import names to be tolerant of package layout
+    from ml.tensorflow_adapter import TensorFlowMLAdapter
+except Exception as e:
     TensorFlowMLAdapter = None
-    import_errors = []
-    for modname in ('infrastructure.adapters.tensorflow_ml_adapter', 'src.infrastructure.adapters.tensorflow_ml_adapter'):
-        try:
-            m = importlib.import_module(modname)
-            TensorFlowMLAdapter = getattr(m, 'TensorFlowMLAdapter', None)
-            if TensorFlowMLAdapter:
-                break
-        except Exception as e:
-            import_errors.append((modname, str(e)))
-    if TensorFlowMLAdapter is None:
-        # show brief debug info (not raising) so the app can continue without TF
-        try:
-            print('Aviso: HardThinking TensorFlow adapter não encontrado. Tentativas:')
-            for modname, err in import_errors:
-                print(f'  {modname}: {err}')
-        except Exception:
-            pass
-except Exception:
-    TensorFlowMLAdapter = None
-    print('Aviso: HardThinking TensorFlow adapter não encontrado. Funcionalidade de TF ficará indisponível.')
+    print(f'Aviso: TensorFlow adapter não encontrado: {e}')
 from communication.unity import UDP_sender, UnityCommunicator
 from communication.esp32 import get_esp32_communicator
 from gui.dialogs.training_dialog import TrainingDialog
@@ -798,6 +749,19 @@ class StreamingWidget(QWidget):
                 recording_path = display_path if USE_OPENBCI_LOGGER else filename
                 self.db_manager.add_recording(self.current_patient_id, recording_path, task)
                 
+                # =====================================================================
+                # ENVIAR TRIGGER PARA ATIVAR A TAREFA NO VR
+                # =====================================================================
+                try:
+                    communicator = UnityCommunicator()
+                    if communicator.is_active and communicator.tcp_connected:
+                        time.sleep(0.5)  # Pequeno delay para garantir que tudo está pronto
+                        communicator.send_trigger()
+                        print(f"[GRAVAÇÃO] send_trigger() enviado para VR", flush=True)
+                except Exception as e:
+                    print(f"[GRAVAÇÃO] Erro ao enviar send_trigger(): {e}", flush=True)
+                # =====================================================================
+                
                 # Iniciar timer de sessão
                 self.session_start_time = time.time()
                 self.session_timer.start(1000)  # Atualizar a cada segundo
@@ -819,6 +783,27 @@ class StreamingWidget(QWidget):
             
             self.is_recording = False
             self.game_mode = False  # Desativar modo jogo
+            
+            # =====================================================================
+            # ENVIAR END_TASK PARA O VR
+            # =====================================================================
+            current_task = self.task_combo.currentText()
+            try:
+                communicator = UnityCommunicator()
+                if communicator.is_active and communicator.tcp_connected:
+                    # Enviar end_task
+                    communicator.end_task()
+                    print(f"[GRAVAÇÃO] end_task() enviado para VR", flush=True)
+                    
+                    # Se for jogo, também enviar end_session com mensagem motivacional
+                    if current_task == "Jogo":
+                        time.sleep(0.3)  # Pequeno delay
+                        communicator.end_session("Parabéns! Sessão finalizada com sucesso!")
+                        print(f"[GRAVAÇÃO] end_session() com mensagem enviada para VR", flush=True)
+            except Exception as e:
+                print(f"[GRAVAÇÃO] Erro ao enviar end_task/end_session: {e}", flush=True)
+            
+            # =====================================================================
             
             # Parar UDP receiver de acurácia
             self.stop_accuracy_udp_receiver()
@@ -862,7 +847,6 @@ class StreamingWidget(QWidget):
             self.update_session_timer()
             
             # Verificar se é tarefa de treino para mostrar popup de treinamento
-            current_task = self.task_combo.currentText()
             print(f"[DEBUG] stop_recording: current_task={current_task}, logger_present={logger is not None}")
             if current_task == "Treino":
                 # Obter informações para o treino
@@ -1163,96 +1147,25 @@ class StreamingWidget(QWidget):
         Retorna True se carregado com sucesso, False caso contrário.
         """
         try:
-            # Delegar para adapter TensorFlow se for .h5
+            # Delegar para adapter TensorFlow se for .h5 ou .keras
             if model_path.endswith('.h5') or model_path.endswith('.keras'):
-                # locate HardThinking/src using a robust search (parents + cwd)
-                current_dir = Path(__file__).parent.parent.parent
-                hardthinking_src = None
-
-                # First try: climb a few levels from current_dir
-                probe = current_dir
-                for _ in range(6):
-                    candidate = probe / 'HardThinking' / 'src'
-                    if candidate.exists():
-                        hardthinking_src = candidate
-                        break
-                    probe = probe.parent
-
-                # Second try: full parent chain
-                if hardthinking_src is None:
-                    for parent in current_dir.resolve().parents:
-                        candidate = parent / 'HardThinking' / 'src'
-                        if candidate.exists():
-                            hardthinking_src = candidate
-                            break
-
-                # Third try: cwd chain
-                if hardthinking_src is None:
-                    cwd = Path.cwd()
-                    probe = cwd
-                    for _ in range(6):
-                        candidate = probe / 'HardThinking' / 'src'
-                        if candidate.exists():
-                            hardthinking_src = candidate
-                            break
-                        probe = probe.parent
-
-                if hardthinking_src is None:
-                    # Debug info to help the developer locate why the path wasn't found
-                    print("Falha ao localizar HardThinking/src para carregar adapter TensorFlow")
-                    try:
-                        print(f"Debug: searched from current_dir={current_dir}, cwd={Path.cwd()}")
-                        import sys as _sys
-                        print("Debug sys.path:")
-                        for p in _sys.path:
-                            print(f"  {p}")
-                    except Exception:
-                        pass
-                    return False
-
-                hardthinking_root = hardthinking_src.parent
-                # ensure both src and its parent are on sys.path
-                for p in (str(hardthinking_src), str(hardthinking_root)):
-                    if p not in sys.path:
-                        sys.path.insert(0, p)
-
-                import_errors = []
-                TensorFlowMLAdapter = None
-                # Try several possible import names
-                import_candidates = [
-                    'infrastructure.adapters.tensorflow_ml_adapter',
-                    'src.infrastructure.adapters.tensorflow_ml_adapter',
-                ]
-                for modname in import_candidates:
-                    try:
-                        m = importlib.import_module(modname)
-                        TensorFlowMLAdapter = getattr(m, 'TensorFlowMLAdapter', None)
-                        if TensorFlowMLAdapter:
-                            break
-                    except Exception as ie:
-                        import_errors.append((modname, str(ie)))
-
+                # Verificar se TensorFlowMLAdapter foi importado com sucesso
                 if TensorFlowMLAdapter is None:
-                    msg = 'Falha ao localizar TensorFlowMLAdapter. Tentativas:\n'
-                    for modname, err in import_errors:
-                        msg += f"  {modname}: {err}\n"
+                    msg = 'Falha: TensorFlowMLAdapter não disponível. TensorFlow não está instalado?'
                     print(msg)
                     try:
-                        # gravar log de debug
-                        try:
-                            os.makedirs(str(Path(__file__).parent.parent / 'logs'), exist_ok=True)
-                            ts = time.strftime('%Y%m%d_%H%M%S')
-                            lf = Path(__file__).parent.parent / 'logs' / f'model_load_error_{ts}.log'
-                            with open(lf, 'w', encoding='utf-8') as fh:
-                                fh.write(msg + '\n')
-                        except Exception:
-                            lf = None
-                        label_txt = 'Erro: falha ao localizar adapter TF'
-                        if lf:
-                            label_txt += f" (ver {lf.name})"
-                        self.model_status_label.setText(label_txt)
+                        os.makedirs(str(Path(__file__).parent.parent / 'logs'), exist_ok=True)
+                        ts = time.strftime('%Y%m%d_%H%M%S')
+                        lf = Path(__file__).parent.parent / 'logs' / f'model_load_error_{ts}.log'
+                        with open(lf, 'w', encoding='utf-8') as fh:
+                            fh.write(msg + '\n')
+                            fh.write('Instale TensorFlow com: pip install tensorflow\n')
                     except Exception:
-                        pass
+                        lf = None
+                    label_txt = 'Erro: TensorFlow adapter não disponível'
+                    if lf:
+                        label_txt += f" (ver {lf.name})"
+                    self.model_status_label.setText(label_txt)
                     return False
 
                 # Instanciar adapter e carregar o modelo com tratamento de erros
