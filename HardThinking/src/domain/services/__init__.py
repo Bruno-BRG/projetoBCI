@@ -1,3 +1,0 @@
-"""
-Serviços do domínio
-"""

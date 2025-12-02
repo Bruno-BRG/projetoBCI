@@ -1,3 +1,0 @@
-"""
-Adaptadores para Machine Learning
-"""
