@@ -1,0 +1,53 @@
+================================================================================
+RELATÓRIO DE OTIMIZAÇÃO - QUADRADO LATINO
+================================================================================
+
+Data/Hora: 2025-12-11 00:44:51
+Total de variações testadas: 50
+Resultados bem-sucedidos: 50/50
+Configurações na região otimizada: 19/50
+
+PARÂMETROS DO TESTE:
+  • Conjuntos de canais pré-definidos: 4, 6, 8, 10, 12, 14, 16
+  • Duração testada: 1.0s - 4.0s (125 - 500 amostras)
+  • Frequência de amostragem: 125.0 Hz
+  • Estratégia: Latin Hypercube Sampling (distribuição uniforme)
+  • Modelo: EEGNET
+
+ESTATÍSTICAS GERAIS:
+  • Val Loss - Mínimo: 0.5428
+  • Val Loss - Máximo: 0.7457
+  • Val Loss - Média: 0.6891
+  • Test Accuracy - Mínima: 0.4706
+  • Test Accuracy - Máxima: 0.7407
+  • Test Accuracy - Média: 0.5623
+
+MELHOR CONFIGURAÇÃO (Menor Val Loss):
+  • Número de canais: 12
+  • Canais utilizados: C3, C4, T7, T8, F3, F4, F7, F8, P7, P8, P3, P4
+  • Duração: 3.80 segundos (475 amostras)
+  • Train Loss: 0.5067
+  • Val Loss: 0.5428
+  • Test Accuracy: 0.7407
+
+MELHOR CONFIGURAÇÃO (Maior Test Accuracy):
+  • Número de canais: 12
+  • Canais utilizados: C3, C4, T7, T8, F3, F4, F7, F8, P7, P8, P3, P4
+  • Duração: 3.80 segundos (475 amostras)
+  • Train Loss: 0.5067
+  • Val Loss: 0.5428
+  • Test Accuracy: 0.7407
+
+TOP 5 CONFIGURAÇÕES (Menor Val Loss):
+  1. Canais: C3, C4, T7, T8, F3, F4, F7, F8, P7, P8, P3, P4 | Duração: 3.80s | Val Loss: 0.5428 | Accuracy: 0.7407
+  2. Canais: C3, C4, T7, T8, F3, F4, F7, F8 | Duração: 3.55s | Val Loss: 0.5564 | Accuracy: 0.7344
+  3. Canais: C3, C4, T7, T8, F3, F4, F7, F8, P7, P8, P3, P4, Fp1, Fp2 | Duração: 3.70s | Val Loss: 0.5846 | Accuracy: 0.7241
+  4. Canais: C3, C4, T7, T8, F3, F4, F7, F8, P7, P8 | Duração: 3.80s | Val Loss: 0.6066 | Accuracy: 0.7303
+  5. Canais: C3, C4, T7, T8, F3, F4, F7, F8, P7, P8, P3, P4, Fp1, Fp2, O1, O2 | Duração: 3.70s | Val Loss: 0.6118 | Accuracy: 0.7178
+
+TOP 5 CONFIGURAÇÕES (Maior Accuracy):
+  1. Canais: C3, C4, T7, T8, F3, F4, F7, F8, P7, P8, P3, P4 | Duração: 3.80s | Val Loss: 0.5428 | Accuracy: 0.7407
+  2. Canais: C3, C4, T7, T8, F3, F4, F7, F8 | Duração: 3.55s | Val Loss: 0.5564 | Accuracy: 0.7344
+  3. Canais: C3, C4, T7, T8, F3, F4, F7, F8, P7, P8 | Duração: 3.80s | Val Loss: 0.6066 | Accuracy: 0.7303
+  4. Canais: C3, C4, T7, T8, F3, F4, F7, F8, P7, P8, P3, P4, Fp1, Fp2 | Duração: 3.70s | Val Loss: 0.5846 | Accuracy: 0.7241
+  5. Canais: C3, C4, T7, T8, F3, F4, F7, F8, P7, P8, P3, P4, Fp1, Fp2, O1, O2 | Duração: 3.70s | Val Loss: 0.6118 | Accuracy: 0.7178

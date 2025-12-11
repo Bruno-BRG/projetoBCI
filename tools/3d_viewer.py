@@ -448,6 +448,7 @@ class LatinSquare3DVisualizer:
         """
         import webbrowser
         import tempfile
+        import json
 
         # Create a comprehensive HTML dashboard
         html_content = """
@@ -695,32 +696,7 @@ class LatinSquare3DVisualizer:
                             </select>
                         </div>
                         
-                        <h2>Interpolação</h2>
-                        
-                        <div class="control-group">
-                            <label>🔄 Tipo de Interpolação:</label>
-                            <select id="interpolation" onchange="updatePlot(); updateInterpolationDesc()">
-                                <option value="linear">Linear (Rápida)</option>
-                                <option value="cubic">Cubic (Suave)</option>
-                                <option value="nearest">Nearest Neighbor</option>
-                                <option value="gaussian">Gaussian Smoothing</option>
-                                <option value="radial">Radial Basis Function</option>
-                                <option value="spline">Bivariate Spline</option>
-                            </select>
-                            <div class="interpolation-desc" id="interpDesc"></div>
-                        </div>
-                        
-                        <div class="control-group">
-                            <label>📏 Resolução da Grade:</label>
-                            <input type="range" id="resolution" min="20" max="100" value="50" onchange="updatePlot(); updateResolutionLabel()">
-                            <span class="slider-value" id="resolutionLabel">50</span>
-                        </div>
-                        
-                        <div class="control-group">
-                            <label>🔆 Suavização Gaussiana:</label>
-                            <input type="range" id="smoothing" min="0" max="5" step="0.1" value="0" onchange="updatePlot(); updateSmoothingLabel()">
-                            <span class="slider-value" id="smoothingLabel">0.0</span>
-                        </div>
+
                         
                         <h2>Estilo & Visualização</h2>
                         
@@ -754,18 +730,9 @@ class LatinSquare3DVisualizer:
                         
                         <div class="control-group">
                             <div class="checkbox-group">
-                                <input type="checkbox" id="showContours" onchange="updatePlot()">
-                                <label for="showContours">Mostrar Contornos</label>
+                                <input type="checkbox" id="showContours" onchange="updatePlot()" disabled>
+                                <label for="showContours">Mostrar Contornos (beta)</label>
                             </div>
-                        </div>
-                        
-                        <div class="control-group" id="contourGroup" style="display:none;">
-                            <label>📍 Projeção de Contornos:</label>
-                            <select id="contourProjection" onchange="updatePlot()">
-                                <option value="z">Eixo Z (Base)</option>
-                                <option value="x">Eixo X (Lateral)</option>
-                                <option value="y">Eixo Y (Lateral)</option>
-                            </select>
                         </div>
                         
                         <h2>Câmera 3D</h2>
@@ -862,103 +829,89 @@ class LatinSquare3DVisualizer:
                 
                 function createAdvancedSurfacePlot() {
                     const metric = document.getElementById('metric').value;
-                    const interpolation = document.getElementById('interpolation').value;
-                    const resolution = parseInt(document.getElementById('resolution').value);
-                    const smoothing = parseFloat(document.getElementById('smoothing').value);
                     const colorscale = document.getElementById('colorscale').value;
-                    const showContours = document.getElementById('showContours').checked;
-                    const contourProjection = document.getElementById('contourProjection').value;
                     const opacity = parseFloat(document.getElementById('opacity').value);
                     const cameraX = parseFloat(document.getElementById('cameraX').value);
                     const cameraY = parseFloat(document.getElementById('cameraY').value);
                     const cameraZ = parseFloat(document.getElementById('cameraZ').value);
                     
-                    // This would ideally be computed server-side, but we'll show a simple client-side version
-                    const x = rawData.map(r => r.samples);
-                    const y = rawData.map(r => r.channels);
-                    const z = rawData.map(r => r[metric]);
-                    
-                    const uniqueX = [...new Set(x)].sort((a, b) => a - b);
-                    const uniqueY = [...new Set(y)].sort((a, b) => a - b);
-                    
-                    // Create simple grid (client-side interpolation limitations)
-                    const grouped = {};
-                    rawData.forEach(row => {
-                        const key = row.samples + '_' + row.channels;
-                        grouped[key] = row[metric];
-                    });
-                    
-                    const zGrid = uniqueY.map(yVal =>
-                        uniqueX.map(xVal => {
-                            const key = xVal + '_' + yVal;
-                            return grouped[key] || null;
-                        })
-                    );
-                    
-                    const trace = {
-                        x: uniqueX,
-                        y: uniqueY,
-                        z: zGrid,
-                        type: 'surface',
-                        colorscale: colorscale,
-                        colorbar: { title: metric, thickness: 15, len: 0.7 },
-                        opacity: opacity,
-                        name: 'Surface'
-                    };
-                    
-                    if (showContours) {
-                        if (contourProjection === 'z') {
-                            trace.contours = {
-                                z: {
-                                    show: true,
-                                    usecolorscale: true,
-                                    highlightcolor: 'limegreen',
-                                    project: { z: true }
-                                }
-                            };
-                        } else if (contourProjection === 'x') {
-                            trace.contours = {
-                                x: {
-                                    show: true,
-                                    usecolorscale: true,
-                                    highlightcolor: 'limegreen',
-                                    project: { x: true }
-                                }
-                            };
-                        } else {
-                            trace.contours = {
-                                y: {
-                                    show: true,
-                                    usecolorscale: true,
-                                    highlightcolor: 'limegreen',
-                                    project: { y: true }
-                                }
-                            };
-                        }
-                    }
-                    
-                    const layout = {
-                        title: {
-                            text: `Advanced 3D Surface: ${metric} (${interpolation} interpolation)`,
-                            font: { size: 18 }
-                        },
-                        scene: {
-                            xaxis: { title: 'Número de Amostras' },
-                            yaxis: { title: 'Número de Canais' },
-                            zaxis: { title: metric.replace('_', ' ').charAt(0).toUpperCase() + metric.replace('_', ' ').slice(1) },
-                            camera: {
-                                eye: { x: cameraX, y: cameraY, z: cameraZ }
+                    try {
+                        // Extract data from rawData
+                        const x = rawData.map(r => r.samples);
+                        const y = rawData.map(r => r.channels);
+                        const z = rawData.map(r => r[metric]);
+                        const color = rawData.map(r => r.test_accuracy);
+                        
+                        console.log('Criando plot com', rawData.length, 'pontos');
+                        
+                        // Create scatter 3D (mais confiável que surface)
+                        const trace = {
+                            x: x,
+                            y: y,
+                            z: z,
+                            mode: 'markers',
+                            type: 'scatter3d',
+                            marker: {
+                                size: 8,
+                                color: color,
+                                colorscale: colorscale,
+                                showscale: true,
+                                colorbar: {
+                                    title: 'Test Accuracy',
+                                    thickness: 15,
+                                    len: 0.7
+                                },
+                                line: { width: 0.5, color: 'white' },
+                                opacity: opacity
                             },
-                            bgcolor: 'rgba(240, 240, 240, 0.9)'
-                        },
-                        width: window.innerWidth - 340,
-                        height: window.innerHeight - 120,
-                        margin: { l: 0, r: 0, b: 0, t: 50 },
-                        paper_bgcolor: 'rgba(255, 255, 255, 1)',
-                        hovermode: 'closest'
-                    };
-                    
-                    Plotly.newPlot('plotDiv', [trace], layout, {responsive: true});
+                            text: rawData.map(r => 
+                                `Canais: ${r.channels}<br>Samples: ${r.samples}<br>${metric}: ${r[metric].toFixed(4)}<br>Test Acc: ${r.test_accuracy.toFixed(4)}`
+                            ),
+                            hovertemplate: '%{text}<extra></extra>',
+                            name: 'Dados'
+                        };
+                        
+                        const layout = {
+                            title: {
+                                text: `Latin Square 3D: ${metric.replace('_', ' ')}`,
+                                font: { size: 18 }
+                            },
+                            scene: {
+                                xaxis: { 
+                                    title: 'Número de Amostras',
+                                    backgroundcolor: 'rgb(230, 230, 230)',
+                                    gridcolor: 'white',
+                                    showbackground: true
+                                },
+                                yaxis: { 
+                                    title: 'Número de Canais',
+                                    backgroundcolor: 'rgb(230, 230, 230)',
+                                    gridcolor: 'white',
+                                    showbackground: true
+                                },
+                                zaxis: { 
+                                    title: metric.replace(/_/g, ' ').charAt(0).toUpperCase() + metric.replace(/_/g, ' ').slice(1),
+                                    backgroundcolor: 'rgb(230, 230, 230)',
+                                    gridcolor: 'white',
+                                    showbackground: true
+                                },
+                                camera: {
+                                    eye: { x: cameraX, y: cameraY, z: cameraZ }
+                                }
+                            },
+                            width: Math.max(800, window.innerWidth - 340),
+                            height: Math.max(600, window.innerHeight - 120),
+                            margin: { l: 0, r: 200, b: 0, t: 50 },
+                            paper_bgcolor: 'rgba(255, 255, 255, 1)',
+                            hovermode: 'closest'
+                        };
+                        
+                        Plotly.newPlot('plotDiv', [trace], layout, {responsive: true});
+                        console.log('✅ Plot criado com sucesso!');
+                    } catch(error) {
+                        console.error('❌ Erro ao criar plot:', error);
+                        document.getElementById('plotDiv').innerHTML = '<p style="color:red; padding:20px;">Erro ao criar gráfico: ' + error.message + '</p>';
+                    }
                 }
                 
                 function updatePlot() {
@@ -1005,7 +958,7 @@ class LatinSquare3DVisualizer:
 
 def main():
     """Main function to demonstrate the visualizer."""
-    csv_file = r"C:\Users\Chari\Documents\dev\Brainbridge\tools\notebook\latin_square_results\latin_square_all_results_20251210_094846.csv"
+    csv_file = r"C:\Users\Chari\Documents\dev\BrainBridge\tools\notebook\latin_square_results\latin_square_all_results_20251211_004451.csv"
 
     # Initialize visualizer
     viz = LatinSquare3DVisualizer(csv_file)
