@@ -1,4 +1,5 @@
 import os
+import sys
 from datetime import datetime
 from typing import Optional, List
 from collections import deque
@@ -6,15 +7,18 @@ import numpy as np
 from pathlib import Path
 import traceback
 import time
+import importlib
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                            QPushButton, QGroupBox, QComboBox, QGridLayout,
                            QMessageBox, QCheckBox,
                            QLineEdit, QSpinBox, QDialog, QInputDialog)
 from PyQt5.QtCore import QThread, pyqtSignal, QTimer, Qt
+from PyQt5.QtGui import QFont
 from database.manager import DatabaseManager
 from acquisition.streaming_thread import StreamingThread
 from config.settings import get_recording_path
 from gui.widgets.eeg_plot import EEGPlotWidget
+from gui.styles import Theme
 
 # Import TensorFlow adapter from brainbridge_v2
 try:
@@ -136,319 +140,324 @@ class StreamingWidget(QWidget):
         self.accuracy_message_signal.connect(self.process_accuracy_message)
         
     def setup_ui(self):
-        """Configura a interface"""
+        """Configura a interface - Layout responsivo com proporções"""
         layout = QVBoxLayout()
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
         
-        # Controles superiores
-        controls_layout = QHBoxLayout()
+        # ============ LINHA 1: Conexão EEG + Servidor UDP + ESP32 (proporção 2:1:1) ============
+        top_row = QHBoxLayout()
+        top_row.setSpacing(6)
         
-        # Conexão
-        connection_group = QGroupBox("Conexão")
-        connection_layout = QHBoxLayout()
+        # --- Grupo 1: Conexão EEG (peso 2) ---
+        connection_group = QGroupBox("🔌 Conexão EEG")
+        connection_group.setFont(QFont("Arial", 9))
+        conn_layout = QVBoxLayout()
+        conn_layout.setSpacing(4)
+        conn_layout.setContentsMargins(8, 12, 8, 8)
         
+        conn_row1 = QHBoxLayout()
+        conn_row1.setSpacing(6)
+        
+        host_label = QLabel("Host:")
+        host_label.setStyleSheet("font-size: 10pt; font-weight: bold;")
         self.host_edit = QLineEdit("localhost")
+        self.host_edit.setStyleSheet("font-size: 11pt; padding: 4px 6px;")
+        
+        port_label = QLabel("Porta:")
+        port_label.setStyleSheet("font-size: 10pt; font-weight: bold;")
         self.port_spin = QSpinBox()
         self.port_spin.setRange(1, 65535)
         self.port_spin.setValue(12345)
+        self.port_spin.setStyleSheet("font-size: 11pt; padding: 4px 6px;")
         
-        self.connect_btn = QPushButton("Conectar")
+        self.connect_btn = QPushButton("🔗 Conectar")
         self.connect_btn.clicked.connect(self.toggle_connection)
         
-        self.status_label = QLabel("Desconectado")
-        self.status_label.setStyleSheet("color: red; font-weight: bold;")
+        # Proporções: Host(3) : Porta(2) : Botão(2)
+        conn_row1.addWidget(host_label)
+        conn_row1.addWidget(self.host_edit, 3)
+        conn_row1.addWidget(port_label)
+        conn_row1.addWidget(self.port_spin, 2)
+        conn_row1.addWidget(self.connect_btn, 2)
         
-        connection_layout.addWidget(QLabel("Host:"))
-        connection_layout.addWidget(self.host_edit)
-        connection_layout.addWidget(QLabel("Porta:"))
-        connection_layout.addWidget(self.port_spin)
-        connection_layout.addWidget(self.connect_btn)
-        connection_layout.addWidget(self.status_label)
+        self.status_label = QLabel("⚪ Desconectado")
+        self.status_label.setStyleSheet(f"color: {Theme.ERROR_COLOR}; font-size: 9pt;")
         
-        connection_group.setLayout(connection_layout)
-        controls_layout.addWidget(connection_group)
+        conn_layout.addLayout(conn_row1)
+        conn_layout.addWidget(self.status_label)
+        connection_group.setLayout(conn_layout)
+        top_row.addWidget(connection_group, 2)  # Peso 2
         
-        # Servidor UDP
-        udp_group = QGroupBox("Servidor UDP")
+        # --- Grupo 2: Servidor UDP (peso 1) ---
+        udp_group = QGroupBox("📡 UDP Unity")
+        udp_group.setFont(QFont("Arial", 9))
         udp_layout = QVBoxLayout()
+        udp_layout.setSpacing(4)
+        udp_layout.setContentsMargins(8, 12, 8, 8)
         
-        # Primeira linha - status e controle do servidor
         udp_row1 = QHBoxLayout()
-        
-        self.udp_status_label = QLabel("Servidor UDP: Desligado")
-        self.udp_status_label.setStyleSheet("color: red; font-weight: bold;")
-        
-        self.udp_toggle_btn = QPushButton("Iniciar Servidor UDP")
+        udp_row1.setSpacing(6)
+        self.udp_toggle_btn = QPushButton("▶ Iniciar")
         self.udp_toggle_btn.clicked.connect(self.toggle_udp_server)
-        self.udp_toggle_btn.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold;")
-        
-        # Checkbox para habilitar/desabilitar envio automático
-        self.udp_auto_send_checkbox = QCheckBox("Envio Automático")
+        self.udp_auto_send_checkbox = QCheckBox("Auto")
         self.udp_auto_send_checkbox.setChecked(True)
-        self.udp_auto_send_checkbox.setToolTip("Quando marcado, envia sinais UDP automaticamente durante as predições")
-        
-        udp_row1.addWidget(self.udp_status_label)
-        udp_row1.addWidget(self.udp_toggle_btn)
-        udp_row1.addWidget(self.udp_auto_send_checkbox)
-        udp_row1.addStretch()
-        
-        # Segunda linha - testes manuais
-        udp_row2 = QHBoxLayout()
-        
-        udp_test_label = QLabel("Teste Manual:")
-        self.udp_test_left_btn = QPushButton("🤚 Mão Esquerda")
+        self.udp_test_left_btn = QPushButton("🤚 Esq")
         self.udp_test_left_btn.clicked.connect(lambda: self.manual_udp_test('esquerda'))
-        self.udp_test_left_btn.setStyleSheet("background-color: #2196F3; color: white; font-weight: bold;")
+        self.udp_test_left_btn.setStyleSheet(f"background-color: {Theme.SECONDARY_GREEN}; color: white;")
         self.udp_test_left_btn.setEnabled(False)
-        
-        self.udp_test_right_btn = QPushButton("✋ Mão Direita")
+        self.udp_test_right_btn = QPushButton("✋ Dir")
         self.udp_test_right_btn.clicked.connect(lambda: self.manual_udp_test('direita'))
-        self.udp_test_right_btn.setStyleSheet("background-color: #FF9800; color: white; font-weight: bold;")
+        self.udp_test_right_btn.setStyleSheet(f"background-color: {Theme.PRIMARY_DARK_GREEN}; color: white;")
         self.udp_test_right_btn.setEnabled(False)
         
-        udp_row2.addWidget(udp_test_label)
-        udp_row2.addWidget(self.udp_test_left_btn)
-        udp_row2.addWidget(self.udp_test_right_btn)
-        udp_row2.addStretch()
+        # Proporções iguais
+        udp_row1.addWidget(self.udp_toggle_btn, 2)
+        udp_row1.addWidget(self.udp_auto_send_checkbox, 1)
+        udp_row1.addWidget(self.udp_test_left_btn, 1)
+        udp_row1.addWidget(self.udp_test_right_btn, 1)
+        
+        self.udp_status_label = QLabel("⚪ Desligado")
+        self.udp_status_label.setStyleSheet(f"color: {Theme.ERROR_COLOR}; font-size: 9pt;")
         
         udp_layout.addLayout(udp_row1)
-        udp_layout.addLayout(udp_row2)
-        
+        udp_layout.addWidget(self.udp_status_label)
         udp_group.setLayout(udp_layout)
-        controls_layout.addWidget(udp_group)
+        top_row.addWidget(udp_group, 1)  # Peso 1
         
-        # Comunicação Serial ESP32
-        serial_group = QGroupBox("Comunicação Serial ESP32")
+        # --- Grupo 3: ESP32 Serial (peso 1) ---
+        serial_group = QGroupBox("🔧 ESP32")
+        serial_group.setFont(QFont("Arial", 9))
         serial_layout = QVBoxLayout()
+        serial_layout.setSpacing(4)
+        serial_layout.setContentsMargins(8, 12, 8, 8)
         
-        # Primeira linha - status e controle da conexão
         serial_row1 = QHBoxLayout()
-        
-        self.esp32_status_label = QLabel("ESP32: Desconectado")
-        self.esp32_status_label.setStyleSheet("color: red; font-weight: bold;")
-        
-        self.esp32_toggle_btn = QPushButton("Conectar ESP32")
+        serial_row1.setSpacing(6)
+        self.esp32_toggle_btn = QPushButton("🔗 Conectar")
         self.esp32_toggle_btn.clicked.connect(self.toggle_esp32_connection)
-        self.esp32_toggle_btn.setStyleSheet("background-color: #9C27B0; color: white; font-weight: bold;")
-        
-        # Checkbox para habilitar/desabilitar envio serial
-        self.esp32_auto_send_checkbox = QCheckBox("Envio Serial Automático")
-        self.esp32_auto_send_checkbox.setChecked(False)  # Desabilitado por padrão
-        self.esp32_auto_send_checkbox.setToolTip("Quando marcado, envia comandos TRIGGER para ESP32 via serial (COM4)")
-        
-        serial_row1.addWidget(self.esp32_status_label)
-        serial_row1.addWidget(self.esp32_toggle_btn)
-        serial_row1.addWidget(self.esp32_auto_send_checkbox)
-        serial_row1.addStretch()
-        
-        # Segunda linha - testes manuais
-        serial_row2 = QHBoxLayout()
-        
-        serial_test_label = QLabel("Teste Manual:")
-        self.esp32_test_left_btn = QPushButton("🤚 Trigger Esquerdo")
+        self.esp32_auto_send_checkbox = QCheckBox("Auto")
+        self.esp32_auto_send_checkbox.setChecked(False)
+        self.esp32_auto_send_checkbox.setToolTip("Envio serial automático")
+        self.esp32_test_left_btn = QPushButton("🤚 Esq")
         self.esp32_test_left_btn.clicked.connect(lambda: self.manual_esp32_test('esquerda'))
-        self.esp32_test_left_btn.setStyleSheet("background-color: #2196F3; color: white; font-weight: bold;")
+        self.esp32_test_left_btn.setStyleSheet(f"background-color: {Theme.SECONDARY_GREEN}; color: white;")
         self.esp32_test_left_btn.setEnabled(False)
-        
-        self.esp32_test_right_btn = QPushButton("✋ Trigger Direito")
+        self.esp32_test_right_btn = QPushButton("✋ Dir")
         self.esp32_test_right_btn.clicked.connect(lambda: self.manual_esp32_test('direita'))
-        self.esp32_test_right_btn.setStyleSheet("background-color: #FF9800; color: white; font-weight: bold;")
+        self.esp32_test_right_btn.setStyleSheet(f"background-color: {Theme.PRIMARY_DARK_GREEN}; color: white;")
         self.esp32_test_right_btn.setEnabled(False)
         
-        serial_row2.addWidget(serial_test_label)
-        serial_row2.addWidget(self.esp32_test_left_btn)
-        serial_row2.addWidget(self.esp32_test_right_btn)
-        serial_row2.addStretch()
+        # Proporções iguais
+        serial_row1.addWidget(self.esp32_toggle_btn, 2)
+        serial_row1.addWidget(self.esp32_auto_send_checkbox, 1)
+        serial_row1.addWidget(self.esp32_test_left_btn, 1)
+        serial_row1.addWidget(self.esp32_test_right_btn, 1)
+        
+        self.esp32_status_label = QLabel("⚪ Desconectado")
+        self.esp32_status_label.setStyleSheet(f"color: {Theme.ERROR_COLOR}; font-size: 9pt;")
         
         serial_layout.addLayout(serial_row1)
-        serial_layout.addLayout(serial_row2)
-        
+        serial_layout.addWidget(self.esp32_status_label)
         serial_group.setLayout(serial_layout)
-        controls_layout.addWidget(serial_group)
+        top_row.addWidget(serial_group, 1)  # Peso 1
         
-        # Gravação
-        recording_group = QGroupBox("Gravação")
-        recording_layout = QVBoxLayout()
+        layout.addLayout(top_row)
         
-        # Primeira linha - seleção de paciente e tarefa
-        recording_row1 = QHBoxLayout()
+        # ============ LINHA 2: Gravação + Marcadores (proporção 2:1) ============
+        mid_row = QHBoxLayout()
+        mid_row.setSpacing(6)
         
+        # --- Grupo: Gravação (peso 2) ---
+        recording_group = QGroupBox("📹 Gravação")
+        recording_group.setFont(QFont("Arial", 9))
+        rec_inner = QHBoxLayout()
+        rec_inner.setSpacing(8)
+        rec_inner.setContentsMargins(8, 12, 8, 8)
+        
+        # Paciente e tarefa - agora com proporções
+        paciente_label = QLabel("Paciente:")
         self.patient_combo = QComboBox()
-        self.refresh_patients_btn = QPushButton("Atualizar")
+        self.refresh_patients_btn = QPushButton("🔄")
         self.refresh_patients_btn.clicked.connect(self.refresh_patients)
-        
-        # Dropdown para seleção de tarefa
+        tarefa_label = QLabel("Tarefa:")
         self.task_combo = QComboBox()
         self.task_combo.addItems(["Baseline", "Treino", "Teste", "Jogo"])
-        self.task_combo.setCurrentIndex(0)  # Baseline como padrão
+        self.task_combo.setCurrentIndex(0)
         self.task_combo.currentTextChanged.connect(self.on_task_changed)
         
-        recording_row1.addWidget(QLabel("Paciente:"))
-        recording_row1.addWidget(self.patient_combo)
-        recording_row1.addWidget(self.refresh_patients_btn)
-        recording_row1.addWidget(QLabel("Tarefa:"))
-        recording_row1.addWidget(self.task_combo)
-        
-        # Segunda linha - controle de gravação
-        recording_row2 = QHBoxLayout()
-        
-        self.record_btn = QPushButton("Iniciar Gravação")
+        self.record_btn = QPushButton("⏺ Gravar")
         self.record_btn.clicked.connect(self.toggle_recording)
         self.record_btn.setEnabled(False)
         
-        self.recording_label = QLabel("Não gravando")
-        self.recording_label.setStyleSheet("color: gray;")
+        self.recording_label = QLabel("⚪ Parado")
+        self.recording_label.setStyleSheet(f"font-size: 9pt;")
         
-        # Label do timer de sessão
-        self.session_timer_label = QLabel("Tempo: 00:00:00")
-        self.session_timer_label.setStyleSheet("color: gray; font-weight: bold;")
+        self.session_timer_label = QLabel("⏱ 00:00:00")
+        self.session_timer_label.setStyleSheet(f"color: {Theme.PRIMARY_GREEN}; font-size: 10pt; font-weight: bold;")
         
-        recording_row2.addWidget(self.record_btn)
-        recording_row2.addWidget(self.recording_label)
-        recording_row2.addWidget(self.session_timer_label)
+        # Proporções: Paciente(3) : Refresh(0) : Tarefa(2) : Gravar(1) : Status(1) : Timer(1)
+        rec_inner.addWidget(paciente_label)
+        rec_inner.addWidget(self.patient_combo, 3)
+        rec_inner.addWidget(self.refresh_patients_btn)
+        rec_inner.addWidget(tarefa_label)
+        rec_inner.addWidget(self.task_combo, 2)
+        rec_inner.addWidget(self.record_btn, 1)
+        rec_inner.addWidget(self.recording_label, 1)
+        rec_inner.addWidget(self.session_timer_label, 1)
         
-        recording_layout.addLayout(recording_row1)
-        recording_layout.addLayout(recording_row2)
+        recording_group.setLayout(rec_inner)
+        mid_row.addWidget(recording_group, 2)  # Peso 2
         
-        # Segunda linha - marcadores
-        markers_group = QGroupBox("Marcadores")
-        markers_layout = QVBoxLayout()
+        # --- Grupo: Marcadores (peso 1) ---
+        markers_group = QGroupBox("🎯 Marcadores")
+        markers_group.setFont(QFont("Arial", 9))
+        mark_inner = QHBoxLayout()
+        mark_inner.setSpacing(8)
+        mark_inner.setContentsMargins(8, 12, 8, 8)
         
-        # Primeira linha - botões de marcadores
-        buttons_row = QHBoxLayout()
-        
-        # Botões de marcadores
-        self.t1_btn = QPushButton("T1 - Mão Esquerda")
-        self.t1_btn.setStyleSheet("background-color: #2196F3; color: white; font-weight: bold;")
+        self.t1_btn = QPushButton("🤚 T1 Esq")
+        self.t1_btn.setStyleSheet(f"background-color: {Theme.SECONDARY_GREEN}; color: white;")
         self.t1_btn.clicked.connect(lambda: self.add_marker("T1"))
         self.t1_btn.setEnabled(False)
         
-        self.t2_btn = QPushButton("T2 - Mão Direita")
-        self.t2_btn.setStyleSheet("background-color: #FF9800; color: white; font-weight: bold;")
+        self.t2_btn = QPushButton("✋ T2 Dir")
+        self.t2_btn.setStyleSheet(f"background-color: {Theme.PRIMARY_DARK_GREEN}; color: white;")
         self.t2_btn.clicked.connect(lambda: self.add_marker("T2"))
         self.t2_btn.setEnabled(False)
+        
+        self.t1_counter_label = QLabel("T1: 0")
+        self.t1_counter_label.setStyleSheet(f"color: {Theme.SECONDARY_GREEN}; font-size: 10pt; font-weight: bold;")
+        self.t2_counter_label = QLabel("T2: 0")
+        self.t2_counter_label.setStyleSheet(f"color: {Theme.PRIMARY_DARK_GREEN}; font-size: 10pt; font-weight: bold;")
         
         # Timer para baseline
         self.baseline_timer = QTimer()
         self.baseline_timer.timeout.connect(self.update_baseline_timer)
         self.baseline_time_remaining = 0
         self.baseline_label = QLabel("")
+        self.baseline_label.setStyleSheet(f"color: {Theme.WARNING_COLOR}; font-weight: bold; font-size: 11pt;")
         
-        buttons_row.addWidget(self.t1_btn)
-        buttons_row.addWidget(self.t2_btn)
-        #buttons_row.addWidget(self.baseline_label)
-        buttons_row.addStretch()
+        # Proporções iguais para marcadores
+        mark_inner.addWidget(self.t1_btn, 2)
+        mark_inner.addWidget(self.t1_counter_label, 1)
+        mark_inner.addWidget(self.t2_btn, 2)
+        mark_inner.addWidget(self.t2_counter_label, 1)
+        mark_inner.addWidget(self.baseline_label, 2)
         
-        # Segunda linha - contadores
-        counters_row = QHBoxLayout()
+        markers_group.setLayout(mark_inner)
+        mid_row.addWidget(markers_group, 1)  # Peso 1
         
-        self.t1_counter_label = QLabel("T1: 0")
-        self.t1_counter_label.setStyleSheet("color: #2196F3; font-weight: bold; font-size: 14px;")
+        layout.addLayout(mid_row)
         
-        self.t2_counter_label = QLabel("T2: 0")
-        self.t2_counter_label.setStyleSheet("color: #FF9800; font-weight: bold; font-size: 14px;")
-        
-        counters_row.addWidget(self.t1_counter_label)
-        counters_row.addWidget(self.t2_counter_label)
-        counters_row.addStretch()
-        
-        markers_layout.addLayout(buttons_row)
-        markers_layout.addLayout(counters_row)
-        
-        markers_group.setLayout(markers_layout)
-        
-        recording_layout.addLayout(recording_row1)
-        recording_layout.addWidget(markers_group)
-        
-        recording_group.setLayout(recording_layout)
-        controls_layout.addWidget(recording_group)
-        
-        layout.addLayout(controls_layout)
-        
-        # Widget de plot
+        # ============ PLOT EEG - Área principal (~60% da tela) ============
         self.plot_widget = EEGPlotWidget()
-        layout.addWidget(self.plot_widget)
+        self.plot_widget.setMinimumHeight(300)
+        layout.addWidget(self.plot_widget, 6)  # Stretch factor maior
         
-        # Timer de sessão
-        self.session_label = QLabel("Sessão: 00:00")
-        self.session_label.setStyleSheet("font-weight: bold;")
+        # Timer de sessão (pequeno, embaixo)
+        self.session_label = QLabel("📊 Sessão: 00:00")
+        self.session_label.setStyleSheet(f"color: {Theme.PRIMARY_DARK_GREEN}; font-size: 9pt;")
         layout.addWidget(self.session_label)
         
-        # Game feedback group
-        game_group = QGroupBox("Predições do Jogo")
-        game_group.setVisible(False)  # Inicialmente oculto
+        # ============ PAINEL DE JOGO (minimalista e centralizado) ============
+        game_group = QGroupBox("🎮 Modo Jogo")
+        game_group.setFont(QFont("Arial", 11))
+        game_group.setVisible(False)
         self.game_group = game_group
-        game_layout = QVBoxLayout()
-
-        # Label para mostrar predição atual
-        self.prediction_label = QLabel("Aguardando predição...")
-        self.prediction_label.setStyleSheet("font-size: 24px; font-weight: bold; padding: 10px;")
-        self.prediction_label.setAlignment(Qt.AlignCenter)
-        game_layout.addWidget(self.prediction_label)
-
-        # Labels para probabilidades
-        self.prob_left_label = QLabel("Mão Esquerda: 0%")
-        self.prob_right_label = QLabel("Mão Direita: 0%")
-        self.prob_left_label.setStyleSheet("color: #2196F3;")
-        self.prob_right_label.setStyleSheet("color: #FF9800;")
-        game_layout.addWidget(self.prob_left_label)
-        game_layout.addWidget(self.prob_right_label)
         
-        # Label para status da janela de IA
-        self.ai_status_label = QLabel("🤖 IA: Aguardando tarefa")
-        self.ai_status_label.setStyleSheet("color: gray; font-weight: bold; font-size: 12px;")
-        self.ai_status_label.setAlignment(Qt.AlignCenter)
-        game_layout.addWidget(self.ai_status_label)
-
-        # Label para status do modelo carregado
-        self.model_status_label = QLabel("Modelo: nenhum carregado")
-        self.model_status_label.setStyleSheet("color: gray; font-size: 11px;")
-        self.model_status_label.setAlignment(Qt.AlignCenter)
-        game_layout.addWidget(self.model_status_label)
-
+        game_layout = QVBoxLayout()
+        game_layout.setSpacing(12)
+        game_layout.setContentsMargins(20, 16, 20, 16)
+        
+        # Linha principal: Predição grande e centralizada
+        prediction_row = QHBoxLayout()
+        prediction_row.addStretch()
+        
+        self.prediction_label = QLabel("🧠 Aguardando predição...")
+        self.prediction_label.setStyleSheet(f"""
+            font-size: 22pt; 
+            font-weight: bold; 
+            color: {Theme.PRIMARY_GREEN};
+            padding: 10px 30px;
+        """)
+        self.prediction_label.setAlignment(Qt.AlignCenter)
+        prediction_row.addWidget(self.prediction_label)
+        
+        prediction_row.addStretch()
+        game_layout.addLayout(prediction_row)
+        
+        # Linha de probabilidades: centralizada com barras visuais
+        prob_row = QHBoxLayout()
+        prob_row.addStretch()
+        
+        self.prob_left_label = QLabel("🤚 Esquerda: 0%")
+        self.prob_left_label.setStyleSheet(f"""
+            font-size: 14pt; 
+            font-weight: bold;
+            color: {Theme.SECONDARY_GREEN};
+            padding: 8px 20px;
+            background-color: {Theme.VERY_LIGHT_GREEN};
+            border-radius: 8px;
+        """)
+        self.prob_left_label.setAlignment(Qt.AlignCenter)
+        
+        self.prob_right_label = QLabel("✋ Direita: 0%")
+        self.prob_right_label.setStyleSheet(f"""
+            font-size: 14pt; 
+            font-weight: bold;
+            color: {Theme.PRIMARY_DARK_GREEN};
+            padding: 8px 20px;
+            background-color: {Theme.VERY_LIGHT_GREEN};
+            border-radius: 8px;
+        """)
+        self.prob_right_label.setAlignment(Qt.AlignCenter)
+        
+        prob_row.addWidget(self.prob_left_label)
+        prob_row.addSpacing(30)
+        prob_row.addWidget(self.prob_right_label)
+        
+        prob_row.addStretch()
+        game_layout.addLayout(prob_row)
+        
+        # Linha de status: modelo e acurácia
+        status_row = QHBoxLayout()
+        status_row.addStretch()
+        
+        self.model_status_label = QLabel("📦 Modelo: nenhum")
+        self.model_status_label.setStyleSheet(f"font-size: 11pt; color: {Theme.DARK_TEXT};")
+        
+        self.accuracy_label = QLabel("⭐ Acurácia: 0%")
+        self.accuracy_label.setStyleSheet(f"font-size: 11pt; font-weight: bold; color: {Theme.PRIMARY_GREEN};")
+        
+        self.ai_status_label = QLabel("🤖 IA: Aguardando")
+        self.ai_status_label.setStyleSheet(f"font-size: 11pt; color: {Theme.DARK_TEXT};")
+        
+        status_row.addWidget(self.model_status_label)
+        status_row.addSpacing(30)
+        status_row.addWidget(self.accuracy_label)
+        status_row.addSpacing(30)
+        status_row.addWidget(self.ai_status_label)
+        
+        status_row.addStretch()
+        game_layout.addLayout(status_row)
+        
         game_group.setLayout(game_layout)
         layout.addWidget(game_group)
         
-        # Accuracy group (só aparece no modo jogo)
-        accuracy_group = QGroupBox("Acurácia do Modelo")
-        accuracy_group.setVisible(False)  # Inicialmente oculto
-        self.accuracy_group = accuracy_group
-        accuracy_layout = QHBoxLayout()
+        # Labels ocultos (mantidos para compatibilidade mas não exibidos separadamente)
+        self.accuracy_details_label = QLabel("")
+        self.accuracy_details_label.setVisible(False)
+        self.accuracy_group = game_group  # Aponta para o mesmo grupo
         
-        # Label principal de acurácia
-        self.accuracy_label = QLabel("Acurácia: 0% (0/0)")
-        self.accuracy_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #4CAF50;")
-        
-        # Labels para detalhes
-        self.accuracy_details_label = QLabel("Esperado vs Real")
-        self.accuracy_details_label.setStyleSheet("color: gray; font-size: 12px;")
-        
-        accuracy_layout.addWidget(self.accuracy_label)
-        accuracy_layout.addWidget(self.accuracy_details_label)
-        accuracy_layout.addStretch()
-        
-        accuracy_group.setLayout(accuracy_layout)
-        layout.addWidget(accuracy_group)
-        
-        # Stats group
-        stats_group = QGroupBox("Estatísticas do Jogo")
-        stats_group.setVisible(False)  # Inicialmente oculto
-        self.stats_group = stats_group
-        stats_layout = QGridLayout()
-
-        self.total_predictions_label = QLabel("Total de predições: 0")
-        self.left_predictions_label = QLabel("Mão esquerda: 0")
-        self.right_predictions_label = QLabel("Mão direita: 0")
-        self.transitions_label = QLabel("Transições: 0")
-        self.confidence_label = QLabel("Confiança média: 0%")
-
-        stats_layout.addWidget(self.total_predictions_label, 0, 0)
-        stats_layout.addWidget(self.left_predictions_label, 1, 0)
-        stats_layout.addWidget(self.right_predictions_label, 1, 1)
-        stats_layout.addWidget(self.transitions_label, 2, 0)
-        stats_layout.addWidget(self.confidence_label, 2, 1)
-
-        stats_group.setLayout(stats_layout)
-        layout.addWidget(stats_group)
+        # Stats internos (não exibidos, apenas para tracking)
+        self.total_predictions_label = QLabel("0")
+        self.left_predictions_label = QLabel("0")
+        self.right_predictions_label = QLabel("0")
+        self.transitions_label = QLabel("0")
+        self.confidence_label = QLabel("0%")
+        self.stats_group = QWidget()  # Widget vazio, não visível
+        self.stats_group.setVisible(False)
 
         # Timer para atualizar estatísticas
         self.stats_timer = QTimer()

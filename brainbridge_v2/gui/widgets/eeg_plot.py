@@ -26,33 +26,41 @@ class EEGPlotWidget(QWidget):
         self.timer.start(50)  # 20 FPS
         
     def setup_ui(self):
-        """Configura a interface do widget"""
+        """Configura a interface do widget - Layout responsivo"""
         layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
         
-        # Controles
+        # Controles compactos com proporções responsivas
         controls_layout = QHBoxLayout()
+        controls_layout.setSpacing(8)
         
         self.channel_combo = QComboBox()
         self.channel_combo.addItems([f"Canal {i}" for i in range(16)])
-        self.channel_combo.addItem("Todos os Canais")
+        self.channel_combo.addItem("Todos")
         self.channel_combo.currentTextChanged.connect(self.change_channel)
         
         self.scale_combo = QComboBox()
         self.scale_combo.addItems(["Auto", "±50µV", "±100µV", "±200µV", "±500µV"])
         self.scale_combo.currentTextChanged.connect(self.change_scale)
         
-        controls_layout.addWidget(QLabel("Canal:"))
-        controls_layout.addWidget(self.channel_combo)
-        controls_layout.addWidget(QLabel("Escala:"))
-        controls_layout.addWidget(self.scale_combo)
-        controls_layout.addStretch()
+        ch_label = QLabel("Canal:")
+        sc_label = QLabel("Escala:")
+        
+        # Proporções responsivas
+        controls_layout.addWidget(ch_label)
+        controls_layout.addWidget(self.channel_combo, 2)
+        controls_layout.addWidget(sc_label)
+        controls_layout.addWidget(self.scale_combo, 2)
+        controls_layout.addStretch(5)  # Espaço à direita
         
         layout.addLayout(controls_layout)
         
-        # Área do plot
-        self.figure = Figure(figsize=(12, 8))
+        # Área do plot - aumentar para preencher espaço
+        self.figure = Figure(figsize=(12, 6), dpi=100)
+        self.figure.set_tight_layout(True)
         self.canvas = FigureCanvas(self.figure)
-        layout.addWidget(self.canvas)
+        layout.addWidget(self.canvas, 1)  # Stretch para preencher
         
         self.setLayout(layout)
         
@@ -109,7 +117,7 @@ class EEGPlotWidget(QWidget):
         # Atualizar cada linha
         selected_channel = self.channel_combo.currentText()
         
-        if selected_channel == "Todos os Canais":
+        if selected_channel == "Todos":
             # Mostrar todos os canais com offset
             for i in range(16):
                 if len(windowed_data) > 0:
@@ -118,10 +126,10 @@ class EEGPlotWidget(QWidget):
                     self.lines[i].set_visible(True)
             
             self.ax.set_ylim(-100, 1600)
-            self.ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+            self.ax.legend(bbox_to_anchor=(1.02, 1), loc='upper left', fontsize=7)
         else:
             # Mostrar apenas um canal
-            channel_idx = int(selected_channel.split()[1])
+            channel_idx = int(selected_channel.replace('Canal ', ''))
             
             for i in range(16):
                 if i == channel_idx and len(windowed_data) > 0:

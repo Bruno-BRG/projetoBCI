@@ -49,10 +49,14 @@ def run_gui():
     try:
         from PyQt5.QtWidgets import QApplication
         from gui.main_window import MainWindow
+        from gui.styles import apply_theme
         
         app = QApplication(sys.argv)
         app.setApplicationName("BrainBridge")
         app.setApplicationVersion("2.0.0")
+        
+        # Aplicar tema visual
+        apply_theme(app)
         
         window = MainWindow()
         window.show()
