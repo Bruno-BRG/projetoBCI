@@ -48,3 +48,4 @@ window_plots/
 # Local development settings
 .env
 .env.local
+*.edf

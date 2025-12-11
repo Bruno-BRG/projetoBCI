@@ -1,0 +1,10 @@
+PhysioNet EEG BCI Dataset
+==================================================
+
+Sujeitos: 1 a 79 (total 79)
+Tarefa: Imaginação de movimento (esquerda/direita)
+Canais EEG: 64
+Total de épocas: 2088
+Classes: left, right
+Frequência de amostragem: 160.0 Hz
+Duração de cada época: 1s a 4.1s (3.1s total)
