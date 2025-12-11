@@ -34,8 +34,8 @@ try:
     # Baixar dados dos sujeitos 1 a 79 (N_SUBJECT - 30)
     print("⏳ Baixando arquivos EDF do PhysioNet (isso pode levar alguns minutos)...")
     physionet_paths = []
-    for subject_id in range(1, (N_SUBJECT - 30) + 1):
-        for run in IMAGINE_OPEN_CLOSE_LEFT_RIGHT_FIST:
+    for subject_id in range(1, (N_SUBJECT - 60) + 1):
+        for run in OPEN_CLOSE_LEFT_RIGHT_FIST:
             path = mne.datasets.eegbci.load_data(
                 subject_id,
                 runs=[run],

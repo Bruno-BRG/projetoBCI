@@ -2,6 +2,7 @@ import mne
 import pandas as pd
 import numpy as np
 import os
+import re
  # OBSERVAÇÃO O ARQUIVO AQ GERADO VAI SAIR NA PASTA QUE ESTÁ O SEU ARQUIVO EDF COM O NOME DO ARQUIVO EDF + _csv_openbci
 def processar_edf_para_openbci(diretorio_edf, filtragem, canais, algarismos_significativos=5):
     """
@@ -136,8 +137,14 @@ def processar_pasta_recursivamente(pasta_raiz, filtragem=None, canais=None, alga
     for raiz, subpastas, arquivos in os.walk(pasta_raiz):
         print(f"\n📁 Processando pasta: {raiz}")
         
-        # Filtrar apenas arquivos EDF
-        arquivos_edf = [f for f in arquivos if f.lower().endswith('.edf')]
+        # Filtrar apenas arquivos EDF com número ímpar (ex: S001R11.edf)
+        arquivos_edf = []
+        for f in arquivos:
+            if f.lower().endswith('.edf'):
+                # Extrai o número antes da extensão .edf
+                match = re.search(r'(\d+)\.edf$', f, re.IGNORECASE)
+                if match and int(match.group(1)) % 2 == 0:
+                    arquivos_edf.append(f)
         
         if not arquivos_edf:
             print(f"   ℹ️  Nenhum arquivo EDF encontrado")
