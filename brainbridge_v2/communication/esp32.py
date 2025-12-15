@@ -1,9 +1,10 @@
 """
 Módulo de comunicação serial com ESP32
-Envia comandos TRIGGER para ESP32 via porta serial COM4
+Envia comandos TRIGGER para ESP32 via porta serial COM3
 """
 
 import serial
+import serial.tools.list_ports
 import threading
 import time
 from typing import Optional, Callable
@@ -40,6 +41,41 @@ class ESP32SerialCommunicator:
         
         # Logger
         self.logger = logging.getLogger(__name__)
+        
+        # Controle de duração do trigger (3 segundos)
+        self.trigger_duration = 3.0  # segundos
+        self.last_trigger_time = 0.0
+        self.trigger_active = False
+    
+    @staticmethod
+    def list_available_ports() -> list:
+        """
+        Lista todas as portas seriais disponíveis
+        
+        Returns:
+            list: Lista de tuplas (porta, descrição)
+        """
+        ports = []
+        try:
+            for port in serial.tools.list_ports.comports():
+                ports.append((port.device, port.description))
+        except Exception as e:
+            logging.error(f"Erro ao listar portas: {e}")
+        return ports
+    
+    @staticmethod
+    def port_exists(port: str) -> bool:
+        """
+        Verifica se uma porta serial existe
+        
+        Args:
+            port: Nome da porta (ex: COM3)
+            
+        Returns:
+            bool: True se porta existe
+        """
+        available_ports = [p[0] for p in ESP32SerialCommunicator.list_available_ports()]
+        return port in available_ports
     
     def connect(self) -> bool:
         """
@@ -51,9 +87,22 @@ class ESP32SerialCommunicator:
         with self._lock:
             if self.is_connected:
                 self.logger.info("ESP32 já conectado")
+                print(f"[ESP32] ℹ Já está conectado em {self.port}", flush=True)
                 return True
             
+            # Verificar se porta existe antes de tentar conectar
+            if not self.port_exists(self.port):
+                available_ports = self.list_available_ports()
+                self.logger.error(f"Porta {self.port} não encontrada!")
+                msg = f"[ESP32] ✗ Porta {self.port} não existe!"
+                if available_ports:
+                    msg += f"\nPortas disponíveis: {', '.join([p[0] for p in available_ports])}"
+                    self.logger.error(f"Portas disponíveis: {available_ports}")
+                print(msg, flush=True)
+                return False
+            
             try:
+                print(f"[ESP32] Conectando em {self.port} @ {self.baudrate} baud...", flush=True)
                 self.serial_connection = serial.Serial(
                     port=self.port,
                     baudrate=self.baudrate,
@@ -67,10 +116,14 @@ class ESP32SerialCommunicator:
                 # Teste de comunicação
                 if self.serial_connection.is_open:
                     self.is_connected = True
-                    self.logger.info(f"ESP32 conectado em {self.port} @ {self.baudrate}")
+                    msg = f"[ESP32] ✓ Conectado em {self.port} @ {self.baudrate}"
+                    self.logger.info(msg)
+                    print(msg, flush=True)
                     
-                    # Enviar comando de teste
-                    self._send_raw_command("PING")
+                    # Enviar comando de teste (sem lock recursivo)
+                    self.serial_connection.write(b"PING\n")
+                    self.serial_connection.flush()
+                    self.logger.debug("PING enviado")
                     
                     # Notificar mudança de conexão
                     if self.on_connection_changed:
@@ -79,14 +132,19 @@ class ESP32SerialCommunicator:
                     return True
                 else:
                     self.logger.error("Falha ao abrir porta serial")
+                    print("[ESP32] ✗ Falha ao abrir porta serial", flush=True)
                     return False
                     
             except serial.SerialException as e:
-                self.logger.error(f"Erro de comunicação serial: {e}")
+                msg = f"[ESP32] ✗ Erro ao conectar: {e}"
+                self.logger.error(msg)
+                print(msg, flush=True)
                 self.serial_connection = None
                 return False
             except Exception as e:
-                self.logger.error(f"Erro inesperado ao conectar ESP32: {e}")
+                msg = f"[ESP32] ✗ Erro inesperado: {e}"
+                self.logger.error(msg)
+                print(msg, flush=True)
                 self.serial_connection = None
                 return False
     
@@ -109,9 +167,9 @@ class ESP32SerialCommunicator:
                     if self.on_connection_changed:
                         self.on_connection_changed(False)
     
-    def _send_raw_command(self, command: str) -> bool:
+    def _send_raw_command_unlocked(self, command: str) -> bool:
         """
-        Envia comando bruto para ESP32
+        Envia comando bruto para ESP32 (SEM lock - usar dentro de _send_raw_command)
         
         Args:
             command: Comando a ser enviado
@@ -120,7 +178,8 @@ class ESP32SerialCommunicator:
             bool: True se enviado com sucesso
         """
         if not self.is_connected or not self.serial_connection:
-            self.logger.warning("ESP32 não conectado - comando ignorado")
+            self.logger.warning(f"[ESP32] Não conectado - comando '{command}' ignorado")
+            print(f"[ESP32] ✗ Não conectado para enviar: {command}", flush=True)
             return False
         
         try:
@@ -129,38 +188,78 @@ class ESP32SerialCommunicator:
                 command += '\n'
             
             # Enviar comando
-            self.serial_connection.write(command.encode('utf-8'))
+            bytes_written = self.serial_connection.write(command.encode('utf-8'))
             self.serial_connection.flush()
             
-            self.logger.debug(f"Comando enviado para ESP32: {command.strip()}")
+            self.logger.info(f"[ESP32] Enviado: {command.strip()} ({bytes_written} bytes)")
+            print(f"[ESP32] ✓ Comando enviado: {command.strip()}", flush=True)
             return True
             
         except serial.SerialException as e:
-            self.logger.error(f"Erro ao enviar comando serial: {e}")
-            # Tentar reconectar em caso de erro
+            self.logger.error(f"[ESP32] Erro serial: {e}")
             self.is_connected = False
+            print(f"[ESP32] ✗ Erro serial: {e}", flush=True)
             return False
         except Exception as e:
-            self.logger.error(f"Erro inesperado ao enviar comando: {e}")
+            self.logger.error(f"[ESP32] Erro inesperado: {e}")
+            print(f"[ESP32] ✗ Erro: {e}", flush=True)
             return False
+    
+    def _send_raw_command(self, command: str) -> bool:
+        """
+        Envia comando bruto para ESP32 (COM lock)
+        
+        Args:
+            command: Comando a ser enviado
+            
+        Returns:
+            bool: True se enviado com sucesso
+        """
+        with self._lock:
+            return self._send_raw_command_unlocked(command)
     
     def send_trigger_command(self, hand: str) -> bool:
         """
         Envia comando de trigger para ESP32
+        Mantém o trigger ativo por 3 segundos antes de liberar para o próximo
         
         Args:
             hand: 'direita'/'right' ou 'esquerda'/'left'
             
         Returns:
-            bool: True se enviado com sucesso
+            bool: True se enviado com sucesso, False se trigger ainda ativo
         """
+        with self._lock:
+            # Verificar se ainda há trigger ativo
+            if self.trigger_active:
+                tempo_restante = self.trigger_duration - (time.time() - self.last_trigger_time)
+                if tempo_restante > 0:
+                    msg = f"[ESP32] ⏳ Trigger bloqueado por {tempo_restante:.1f}s"
+                    self.logger.warning(msg)
+                    print(msg, flush=True)
+                    return False
+                else:
+                    # Tempo expirou, liberar novo trigger
+                    self.trigger_active = False
+        
+        # Enviar comando
         if hand.lower() in ['direita', 'right']:
-            return self._send_raw_command("RIGHT_HAND_CLOSE")
+            success = self._send_raw_command_unlocked("RIGHT")
         elif hand.lower() in ['esquerda', 'left']:
-            return self._send_raw_command("LEFT_HAND_CLOSE")
+            success = self._send_raw_command_unlocked("LEFT")
         else:
             self.logger.error(f"Comando de trigger inválido: {hand}")
             return False
+        
+        if success:
+            # Registrar tempo do trigger
+            self.last_trigger_time = time.time()
+            self.trigger_active = True
+            msg = f"[ESP32] ▶️  Trigger iniciado - bloqueado por {self.trigger_duration}s"
+            self.logger.info(msg)
+            print(msg, flush=True)
+        
+        return success
     
     def send_trigger_left(self) -> bool:
         """
@@ -205,12 +304,46 @@ class ESP32SerialCommunicator:
         Returns:
             dict: Informações sobre a conexão
         """
-        return {
-            'connected': self.is_connected,
-            'port': self.port,
-            'baudrate': self.baudrate,
-            'timeout': self.timeout
-        }
+        with self._lock:
+            tempo_restante = 0.0
+            if self.trigger_active:
+                tempo_restante = max(0.0, self.trigger_duration - (time.time() - self.last_trigger_time))
+            
+            return {
+                'connected': self.is_connected,
+                'port': self.port,
+                'baudrate': self.baudrate,
+                'timeout': self.timeout,
+                'trigger_active': self.trigger_active,
+                'trigger_remaining_time': tempo_restante
+            }
+    
+    def is_trigger_ready(self) -> bool:
+        """
+        Verifica se pode enviar um novo trigger
+        
+        Returns:
+            bool: True se pronto para enviar
+        """
+        with self._lock:
+            if not self.trigger_active:
+                return True
+            
+            tempo_restante = self.trigger_duration - (time.time() - self.last_trigger_time)
+            return tempo_restante <= 0
+    
+    def get_trigger_remaining_time(self) -> float:
+        """
+        Obtém o tempo restante de blockeio do trigger em segundos
+        
+        Returns:
+            float: Tempo em segundos (0 se nenhum trigger ativo)
+        """
+        with self._lock:
+            if not self.trigger_active:
+                return 0.0
+            
+            return max(0.0, self.trigger_duration - (time.time() - self.last_trigger_time))
 
 
 # Instância singleton para fácil acesso

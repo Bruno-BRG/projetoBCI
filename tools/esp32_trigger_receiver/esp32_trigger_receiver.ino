@@ -1,15 +1,22 @@
  /*
  * ESP32 — TRIGGERS via Serial
- * LEFT  -> GPIO18  (acende LED no 18)
- * RIGHT -> GPIO22
+ * LEFT  -> GPIO19  (ativa por 3 segundos)
+ * RIGHT -> GPIO22  (ativa por 3 segundos)
+ * 
+ * Sistema de bloqueio: Após receber um comando, bloqueia por 3 segundos
+ * e ignora qualquer outro sinal nesse período
  */
 
-#define TRIGGER_LEFT_PIN   19   // <-- p  edido: LEFT no GPIO18
-#define TRIGGER_RIGHT_PIN  22   // <-- pedido: RIGHT no GPIO22
-#define LED_PIN             2   // LED onboard (a maioria dos ESP32 usa GPIO2)
+#define TRIGGER_LEFT_PIN   19   // GPIO19 para LEFT
+#define TRIGGER_RIGHT_PIN  22   // GPIO22 para RIGHT
+#define LED_PIN             2   // LED onboard para feedback
 
 #define BAUD_RATE          115200
-#define TRIGGER_DURATION   100   // ms
+#define TRIGGER_DURATION   3000  // 3 segundos em ms (mudou de 100ms para 3000ms)
+
+// Variáveis de controle de bloqueio
+unsigned long last_trigger_time = 0;
+bool trigger_active = false;
 
 void setup() {
   Serial.begin(BAUD_RATE);
@@ -22,12 +29,18 @@ void setup() {
   digitalWrite(TRIGGER_RIGHT_PIN, LOW);
   digitalWrite(LED_PIN, LOW);
 
-  Serial.println("ESP32 BCI Trigger System");
-  Serial.println("========================");
+  Serial.println("ESP32 BCI Trigger System v2.0");
+  Serial.println("==============================");
+  Serial.println("Modo: TRIGGER COM BLOQUEIO DE 3 SEGUNDOS");
   Serial.println("Comandos:");
   Serial.println("- TRIGGER_LEFT  | LEFT  | L");
   Serial.println("- TRIGGER_RIGHT | RIGHT | R");
   Serial.println("- PING");
+  Serial.println("---");
+  Serial.println("Ao receber comando:");
+  Serial.println("  1. Ativa pino por 3 segundos");
+  Serial.println("  2. Bloqueia novo sinal por 3 segundos");
+  Serial.println("  3. Ignora comandos durante bloqueio");
   Serial.println("Use newline (\\n) no final do comando.");
   blinkBoot();
 }
@@ -35,15 +48,25 @@ void setup() {
 void loop() {
   static String buf;
 
-  // lê tudo que chegar e monta uma linha até '\n'
+  // Verificar se trigger expirou
+  if (trigger_active && (millis() - last_trigger_time >= TRIGGER_DURATION)) {
+    // Desativar pinos
+    digitalWrite(TRIGGER_LEFT_PIN, LOW);
+    digitalWrite(TRIGGER_RIGHT_PIN, LOW);
+    digitalWrite(LED_PIN, LOW);
+    trigger_active = false;
+    Serial.println("[TRIGGER LIBERADO] Pode receber novo sinal");
+  }
+
+  // Ler dados seriais
   while (Serial.available() > 0) {
     char c = (char)Serial.read();
     if (c == '\n') {
-      buf.trim();                // remove espacos e \r
+      buf.trim();
       if (buf.length() > 0) {
         processCommand(buf);
       }
-      buf = "";                  // zera buffer pra próxima linha
+      buf = "";
     } else {
       buf += c;
     }
@@ -54,9 +77,19 @@ void processCommand(String command) {
   command.trim();
   command.toUpperCase();
 
-  Serial.print("Comando recebido: ");
+  Serial.print("[RX] Comando recebido: ");
   Serial.println(command);
 
+  // Verificar se está bloqueado
+  if (trigger_active) {
+    unsigned long tempo_restante = TRIGGER_DURATION - (millis() - last_trigger_time);
+    Serial.print("[BLOQUEADO] Aguarde ");
+    Serial.print(tempo_restante);
+    Serial.println("ms para enviar novo sinal");
+    return;  // Ignora comando
+  }
+
+  // Processar comando
   if (command == "TRIGGER_LEFT" || command == "LEFT" || command == "L") {
     executeTriggerLeft();
   }
@@ -67,33 +100,57 @@ void processCommand(String command) {
     executePing();
   }
   else {
-    Serial.print("Erro: Comando desconhecido - ");
+    Serial.print("[ERRO] Comando desconhecido - ");
     Serial.println(command);
   }
 }
 
 void executeTriggerLeft() {
-  Serial.println("Executando TRIGGER_LEFT (GPIO19)");
+  Serial.println("[EXEC] Executando TRIGGER_LEFT (GPIO19)");
+  
+  // Ativar pinos
   digitalWrite(TRIGGER_LEFT_PIN, HIGH);
   digitalWrite(LED_PIN, HIGH);
-  delay(TRIGGER_DURATION);
-  digitalWrite(TRIGGER_LEFT_PIN, LOW);
-  digitalWrite(LED_PIN, LOW);
-  Serial.println("TRIGGER_LEFT finalizado");
+  
+  // Registrar tempo e marcar como ativo
+  last_trigger_time = millis();
+  trigger_active = true;
+  
+  Serial.print("[BLOQUEIO] Sinal ativo por ");
+  Serial.print(TRIGGER_DURATION);
+  Serial.println("ms - Sistema bloqueado");
 }
 
 void executeTriggerRight() {
-  Serial.println("Executando TRIGGER_RIGHT (GPIO22)");
+  Serial.println("[EXEC] Executando TRIGGER_RIGHT (GPIO22)");
+  
+  // Ativar pinos
   digitalWrite(TRIGGER_RIGHT_PIN, HIGH);
   digitalWrite(LED_PIN, HIGH);
-  delay(TRIGGER_DURATION);
-  digitalWrite(TRIGGER_RIGHT_PIN, LOW);
-  digitalWrite(LED_PIN, LOW);
-  Serial.println("TRIGGER_RIGHT finalizado");
+  
+  // Registrar tempo e marcar como ativo
+  last_trigger_time = millis();
+  trigger_active = true;
+  
+  Serial.print("[BLOQUEIO] Sinal ativo por ");
+  Serial.print(TRIGGER_DURATION);
+  Serial.println("ms - Sistema bloqueado");
 }
 
 void executePing() {
-  Serial.println("PONG - ESP32 ativo e funcionando");
+  Serial.println("[PING] PONG - ESP32 ativo e funcionando");
+  
+  // PING não ativa bloqueio - pode ser usado para testar conexão
+  if (trigger_active) {
+    unsigned long tempo_restante = TRIGGER_DURATION - (millis() - last_trigger_time);
+    Serial.print("[STATUS] Trigger ativo - bloqueado por ");
+    Serial.print(tempo_restante);
+    Serial.println("ms");
+  } else {
+    Serial.println("[STATUS] Trigger pronto - aceitando comandos");
+  }
+  
+  // Blink de feedback
   digitalWrite(LED_PIN, HIGH); delay(50);
   digitalWrite(LED_PIN, LOW);
 }
@@ -107,11 +164,13 @@ void blinkBoot() {
 
 /*
  * Ligacoes:
- * - GPIO18 -> LED (através de resistor 220–330Ω) -> GND
+ * - GPIO19 -> seu atuador/LED esquerdo (com resistor se for LED)
  * - GPIO22 -> seu atuador/LED direito (com resistor se for LED)
  * - GND em comum com o periférico
  *
  * Dicas:
- * - No Serial Monitor use 115200 baud e "Newline" como line ending.
- * - Se não tiver LED no GPIO2 no seu modelo, pode ignorar o LED_PIN (só feedback).
+ * - Use Serial Monitor em 115200 baud com "Newline" como line ending
+ * - O sistema bloqueia automaticamente por 3 segundos após receber comando
+ * - Use PING para verificar status sem ativar bloqueio
+ * - O bloqueio impede NOVOS sinais, mas mantém o pino ativado pelo tempo programado
  */

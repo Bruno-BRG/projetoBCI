@@ -100,7 +100,14 @@ class StreamingWidget(QWidget):
         # Inicializar comunicador ESP32
         self.esp32_communicator = get_esp32_communicator()
         self.esp32_communicator.set_connection_callback(self._on_esp32_connection)
-        self.esp32_connected = False
+        
+        # Conectar ao ESP32 na inicialização
+        if self.esp32_communicator.connect():
+            self.esp32_connected = True
+            print("[GUI] ✓ ESP32 conectado com sucesso", flush=True)
+        else:
+            self.esp32_connected = False
+            print("[GUI] ✗ Falha ao conectar ESP32", flush=True)
 
     # Contadores para marcadores
         self.t1_counter = 0
