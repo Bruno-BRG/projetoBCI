@@ -1,0 +1,26 @@
+Debounce: pulando aτπo duplicada 'direita' (·ltim envio hß 0.000s)
+Servidor nπo estß ativo
+[SEND_COMMAND] Preparando para enviar (len=13): 'TEST_COMMAND\n'
+[TCP] Erro ao enviar: Conexπo perdida
+[SEND_COMMAND] Preparando para enviar (len=16): 'LEFT_HAND_CLOSE\n'
+[ZMQ] Comando enviado: LEFT_HAND_CLOSE
+[SEND_COMMAND] Preparando para enviar (len=17): 'RIGHT_HAND_CLOSE\n'
+[ZMQ] Comando enviado: RIGHT_HAND_CLOSE
+....E.................
+======================================================================
+ERROR: test_end_to_end_predict_and_send_simplified (tests.test_tensorflow_unity_integration.TestPredictionToUnityFlow)
+Testa fluxo completo: prediτπo -> envio (versπo simplificada)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\Chari\AppData\Local\Programs\Python\Python39\lib\unittest\mock.py", line 1336, in patched
+    return func(*newargs, **newkeywargs)
+  File "C:\Users\Chari\Documents\dev\BrainBridge\brainbridge_v2\tests\test_tensorflow_unity_integration.py", line 276, in test_end_to_end_predict_and_send_simplified
+    print("PASS: Fluxo E2E: predi\u03c4\u03c0o 'right' mapeada para comando 'RIGHT_HAND_CLOSE'")
+  File "C:\Users\Chari\AppData\Local\Programs\Python\Python39\lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+UnicodeEncodeError: 'charmap' codec can't encode characters in position 22-23: character maps to <undefined>
+
+----------------------------------------------------------------------
+Ran 22 tests in 0.294s
+
+FAILED (errors=1)
