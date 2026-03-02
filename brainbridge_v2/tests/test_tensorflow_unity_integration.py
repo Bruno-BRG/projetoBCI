@@ -13,19 +13,20 @@ import numpy as np
 import os
 import sys
 import time
+import shutil
+import uuid
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
-import tempfile
 import json
 
 # Adicionar diretório de brainbridge_v2 ao path
 BASE_DIR = Path(__file__).parent.parent
 sys.path.insert(0, str(BASE_DIR))
 
-from ml.tensorflow_adapter import TensorFlowMLAdapter
-from ml.predictor import Predictor
-from communication.unity import UnityCommunicator, UDP_sender, ActionCommand
-from communication.unity import PatientData, TaskType
+from brainbridge_v2.infrastructure.ml.tensorflow_adapter import TensorFlowMLAdapter
+from brainbridge_v2.infrastructure.ml.predictor import Predictor
+from brainbridge_v2.infrastructure.communication.unity import UnityCommunicator, UDP_sender, ActionCommand
+from brainbridge_v2.infrastructure.communication.unity import PatientData, TaskType
 
 
 class TestTensorFlowAdapter(unittest.TestCase):
@@ -34,11 +35,12 @@ class TestTensorFlowAdapter(unittest.TestCase):
     def setUp(self):
         """Setup para cada teste"""
         self.adapter = TensorFlowMLAdapter()
-        self.temp_dir = tempfile.TemporaryDirectory()
+        self.temp_dir = Path(".pytest_tmp") / f"tf_adapter_{uuid.uuid4().hex}"
+        self.temp_dir.mkdir(parents=True, exist_ok=True)
         
     def tearDown(self):
         """Cleanup após cada teste"""
-        self.temp_dir.cleanup()
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
         
     def test_adapter_initialization(self):
         """Testa inicialização do adaptador"""
@@ -92,7 +94,7 @@ class TestPredictor(unittest.TestCase):
         
     def test_predictor_initialization(self):
         """Testa inicialização do Predictor"""
-        with patch('ml.models.load_keras_model') as mock_load:
+        with patch('brainbridge_v2.infrastructure.ml.models.load_keras_model') as mock_load:
             mock_load.return_value = self.mock_model
             
             predictor = Predictor("dummy_path.keras")
@@ -100,7 +102,7 @@ class TestPredictor(unittest.TestCase):
     
     def test_predict_window_valid_input(self):
         """Testa predição com entrada válida"""
-        with patch('ml.models.load_keras_model') as mock_load:
+        with patch('brainbridge_v2.infrastructure.ml.models.load_keras_model') as mock_load:
             # Setup do mock model
             mock_probs = np.array([[0.3, 0.7]])  # 30% left, 70% right
             self.mock_model.predict.return_value = mock_probs
@@ -120,7 +122,7 @@ class TestPredictor(unittest.TestCase):
     
     def test_predict_window_invalid_shape(self):
         """Testa predição com forma inválida"""
-        with patch('ml.models.load_keras_model') as mock_load:
+        with patch('brainbridge_v2.infrastructure.ml.models.load_keras_model') as mock_load:
             mock_load.return_value = self.mock_model
             predictor = Predictor("dummy_path.keras")
             
@@ -246,7 +248,7 @@ class TestPredictionToUnityFlow(unittest.TestCase):
         
         self.assertEqual(command, 'RIGHT_HAND_CLOSE')
     
-    @patch('ml.models.load_keras_model')
+    @patch('brainbridge_v2.infrastructure.ml.models.load_keras_model')
     def test_end_to_end_predict_and_send_simplified(self, mock_load_model):
         """Testa fluxo completo: predição -> envio (versão simplificada)"""
         # Setup
@@ -327,7 +329,7 @@ class TestPredictionWindow(unittest.TestCase):
     
     def test_batch_prediction(self):
         """Testa predição em lote"""
-        with patch('ml.models.load_keras_model') as mock_load:
+        with patch('brainbridge_v2.infrastructure.ml.models.load_keras_model') as mock_load:
             mock_model = MagicMock()
             # Predição para 3 amostras (batch)
             mock_probs = np.array([

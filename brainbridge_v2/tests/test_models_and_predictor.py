@@ -4,7 +4,7 @@ import pytest
 
 def test_build_model_if_tf_available():
     try:
-        from brainbridge_v2.ml.models import build_cnn_1d
+        from brainbridge_v2.infrastructure.ml.models import build_cnn_1d
         model = build_cnn_1d(input_shape=(250, 16), num_classes=2)
         # Ensure compiled and has correct input shape
         assert model.input_shape[-2:] == (250, 16)
@@ -13,7 +13,7 @@ def test_build_model_if_tf_available():
 
 
 def test_predictor_monkeypatched():
-    from brainbridge_v2.ml.predictor import Predictor
+    from brainbridge_v2.infrastructure.ml.predictor import Predictor
 
     class DummyModel:
         def predict(self, x, verbose=0):
@@ -26,7 +26,7 @@ def test_predictor_monkeypatched():
             return probs
 
     # Monkeypatch loader
-    import brainbridge_v2.ml.models as M
+    import brainbridge_v2.infrastructure.ml.models as M
     orig_loader = M.load_keras_model
     try:
         M.load_keras_model = lambda p: DummyModel()

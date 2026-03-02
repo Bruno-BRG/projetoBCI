@@ -1,7 +1,8 @@
 from pathlib import Path
-import tempfile
+import shutil
 import csv
 import numpy as np
+import uuid
 
 
 def _write_openbci_csv(path: Path, n: int = 600, t1_idx: int = 100, t0_idx: int = 350, t2_idx: int = 360, t0b_idx: int = 550):
@@ -27,9 +28,11 @@ def _write_openbci_csv(path: Path, n: int = 600, t1_idx: int = 100, t0_idx: int 
 
 
 def test_load_and_window_ht():
-    from brainbridge_v2.ml.trainer import _load_openbci_csv, _create_windows_ht
-    with tempfile.TemporaryDirectory() as d:
-        p = Path(d) / 'test.csv'
+    from brainbridge_v2.infrastructure.ml.trainer import _load_openbci_csv, _create_windows_ht
+    temp_dir = Path(".pytest_tmp") / f"trainer_parsing_{uuid.uuid4().hex}"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        p = temp_dir / 'test.csv'
         _write_openbci_csv(p)
         data, markers = _load_openbci_csv(p)
         assert data.shape[1] == 16
@@ -40,3 +43,5 @@ def test_load_and_window_ht():
         if len(X) > 0:
             assert X.shape[1:] == (250, 16)
             assert set(y.tolist()).issubset({0, 1})
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)

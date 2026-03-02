@@ -11,7 +11,7 @@ from typing import Optional
 
 sys.path.insert(0, 'c:\\Users\\Chari\\Documents\\dev\\BrainBridge')
 
-from brainbridge_v2.communication.unity import (
+from brainbridge_v2.infrastructure.communication.unity import (
     UnityCommunicator, SessionPhase, ServerState, 
     PatientData, TaskType, UDP_sender
 )
@@ -108,6 +108,7 @@ class MockVRClient:
             finally:
                 self.connected = False
         
+        self.running = True
         self.thread = threading.Thread(target=receiver, daemon=True)
         self.thread.start()
     

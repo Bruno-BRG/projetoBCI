@@ -1,3 +1,0 @@
-"""
-Utilitários do sistema
-"""

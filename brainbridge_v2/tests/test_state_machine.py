@@ -6,7 +6,7 @@ Valida transições válidas/inválidas e interdependências
 import sys
 sys.path.insert(0, 'c:\\Users\\Chari\\Documents\\dev\\BrainBridge')
 
-from brainbridge_v2.communication.unity import (
+from brainbridge_v2.infrastructure.communication.unity import (
     SessionPhase, ServerState, SessionState, PatientData, 
     TaskType, UnityCommunicator
 )

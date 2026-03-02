@@ -2,10 +2,11 @@
 Testes do protocolo de comunicação Sistema <-> VR Unity
 """
 import pytest
-from brainbridge_v2.communication.unity import (
+from brainbridge_v2.infrastructure.communication.unity import (
     UnityCommunicator,
     PatientData,
     TaskType,
+    SessionPhase,
     ActionCommand,
     EndTaskCommand,
     SessionState
@@ -109,8 +110,7 @@ class TestSessionState:
         session = SessionState()
         assert session.patient is None
         assert session.task_type is None
-        assert session.is_active is False
-        assert session.waiting_confirmation is False
+        assert session.phase == SessionPhase.IDLE
 
 
 class TestUnityCommunicator:
@@ -127,7 +127,7 @@ class TestUnityCommunicator:
         comm = UnityCommunicator()
         assert comm.is_active is False
         assert comm.tcp_connected is False
-        assert comm.session.is_active is False
+        assert comm.session.phase == SessionPhase.IDLE
     
     def test_broadcast_header_constant(self):
         """Verifica que o header de broadcast está correto"""
@@ -186,12 +186,12 @@ class TestCompatibilityLayer:
     
     def test_udp_sender_import(self):
         """Testa que UDP_sender pode ser importado"""
-        from brainbridge_v2.communication.unity import UDP_sender
+        from brainbridge_v2.infrastructure.communication.unity import UDP_sender
         assert UDP_sender is not None
     
     def test_udp_sender_methods_exist(self):
         """Verifica que métodos legados existem"""
-        from brainbridge_v2.communication.unity import UDP_sender
+        from brainbridge_v2.infrastructure.communication.unity import UDP_sender
         
         assert hasattr(UDP_sender, 'init_zmq_socket')
         assert hasattr(UDP_sender, 'stop_zmq_socket')

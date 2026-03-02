@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 def test_data_directories_exist():
-    from brainbridge_v2.config.settings import DATA_DIR, RECORDINGS_DIR, DATABASE_DIR, MODELS_DIR, LOGS_DIR
+    from brainbridge_v2.infrastructure.config.settings import DATA_DIR, RECORDINGS_DIR, DATABASE_DIR, MODELS_DIR, LOGS_DIR
 
     assert DATA_DIR.exists() and DATA_DIR.is_dir()
     assert RECORDINGS_DIR.exists() and RECORDINGS_DIR.is_dir()

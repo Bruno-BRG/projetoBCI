@@ -10,7 +10,7 @@ from pathlib import Path
 # Adicionar o diretório pai ao path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from communication.esp32 import ESP32SerialCommunicator
+from brainbridge_v2.infrastructure.communication.esp32 import ESP32SerialCommunicator
 
 def test_trigger_duration():
     """Testa duração do trigger de 3 segundos"""

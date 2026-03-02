@@ -10,7 +10,7 @@ from pathlib import Path
 # Adicionar o diretório pai ao path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from communication.esp32 import ESP32SerialCommunicator, get_esp32_communicator
+from brainbridge_v2.infrastructure.communication.esp32 import ESP32SerialCommunicator, get_esp32_communicator
 
 def test_esp32_direct():
     """Testa instância direta"""

@@ -13,7 +13,7 @@ project_dir = os.path.dirname(os.path.dirname(test_dir))
 sys.path.insert(0, project_dir)
 
 # Import direto do módulo
-from brainbridge_v2.communication.unity import (
+from brainbridge_v2.infrastructure.communication.unity import (
     SessionPhase, ServerState, SessionState, PatientData,
     TaskType, TriggerCommand, ActionCommand, EndTaskCommand,
     UnityCommunicator

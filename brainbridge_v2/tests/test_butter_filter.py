@@ -2,7 +2,7 @@ import numpy as np
 
 
 def test_butter_filter_shapes_and_rt():
-    from brainbridge_v2.processing.butter_filter import ButterworthFilter
+    from brainbridge_v2.infrastructure.signal_processing.butter_filter import ButterworthFilter
 
     fs = 125.0
     filt = ButterworthFilter(lowcut=0.5, highcut=50.0, fs=fs, order=6)

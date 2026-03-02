@@ -76,7 +76,7 @@ def check_tensorflow_adapter():
     print("="*60)
     
     try:
-        from ml.tensorflow_adapter import TensorFlowMLAdapter
+        from brainbridge_v2.infrastructure.ml.tensorflow_adapter import TensorFlowMLAdapter
         adapter = TensorFlowMLAdapter()
         print(f"✓ TensorFlowMLAdapter inicializado: {adapter}")
         
@@ -116,7 +116,7 @@ def check_predictor():
     print("="*60)
     
     try:
-        from ml.predictor import Predictor
+        from brainbridge_v2.infrastructure.ml.predictor import Predictor
         print("✓ Predictor import bem-sucedido")
         
         # Tentar usar com um modelo mock
@@ -150,7 +150,7 @@ def check_unity_communicator():
     print("="*60)
     
     try:
-        from communication.unity import UnityCommunicator, ActionCommand, PatientData, TaskType
+        from brainbridge_v2.infrastructure.communication.unity import UnityCommunicator, ActionCommand, PatientData, TaskType
         
         # Verificar enums
         print("✓ ActionCommand enum:")
@@ -186,8 +186,8 @@ def check_prediction_to_command_flow():
     print("="*60)
     
     try:
-        from ml.predictor import Predictor
-        from communication.unity import ActionCommand, UnityCommunicator
+        from brainbridge_v2.infrastructure.ml.predictor import Predictor
+        from brainbridge_v2.infrastructure.communication.unity import ActionCommand, UnityCommunicator
         from unittest.mock import MagicMock, patch
         
         # Setup predictor mock
@@ -235,7 +235,7 @@ def check_udp_sender_compatibility():
     print("="*60)
     
     try:
-        from communication.unity import UDP_sender, UnityCommunicator
+        from brainbridge_v2.infrastructure.communication.unity import UDP_sender, UnityCommunicator
         from unittest.mock import MagicMock, patch
         
         print("✓ UDP_sender import bem-sucedido")
