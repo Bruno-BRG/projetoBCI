@@ -1,410 +1,394 @@
 """
-Tema visual para BrainBridge - Verde claro e ebrance com acentos em verde escuro
-Paleta profissional para sistema BCI
+Tema visual para BrainBridge - Réplica pixel-perfect do bci_system.html
+Paleta: Azul escuro (#0a0e27), Painel (#111640), Azul (#3b5bdb)
 """
 
+
 class Theme:
-    """Definição de cores e estilos da aplicação"""
-    
-    # Cores principais - Paleta Verde Profissional
-    PRIMARY_DARK_GREEN = "#1B4D2E"      # Verde escuro (acentos e destaques)
-    PRIMARY_GREEN = "#2D7A4A"            # Verde principal (botões primários)
-    SECONDARY_GREEN = "#4CAF7F"          # Verde médio (hover e interações)
-    LIGHT_GREEN = "#A8D8C8"              # Verde claro (bordas e backgrounds)
-    VERY_LIGHT_GREEN = "#E8F5F0"         # Verde muito claro (backgrounds gerais)
-    
-    # Paleta Neutra - Ebrance
-    WHITE = "#FFFFFF"
-    CREAM = "#F5F5F0"                    # Ebrance claro (fundo principal)
-    DARK_TEXT = "#2C3E50"                # Texto escuro
-    LIGHT_GRAY = "#ECEFF1"
-    BORDER_COLOR = "#B0BEC5"
-    
-    # Cores para feedback
-    SUCCESS_COLOR = "#27AE60"
-    WARNING_COLOR = "#F39C12"
-    ERROR_COLOR = "#E74C3C"
-    INFO_COLOR = "#3498DB"
-    
-    # Tamanhos
+    """Definição de cores e estilos - Idêntico ao bci_system.html"""
+
+    # Cores principais do HTML
+    BG_DARK = "#0a0e27"           # body background
+    PANEL_BG = "#111640"          # main-panel background
+    BLUE = "#3b5bdb"              # cor primária (tabs, bordas, botões)
+    BLUE_HOVER = "#364fc7"        # hover azul
+    BLUE_TRANS = "rgba(59, 91, 219, 0.3)"  # tab hover
+
+    # Cores de botões
+    BTN_BG = "#e2e8f0"           # .btn background
+    BTN_BG_HOVER = "#cbd5e0"     # .btn:hover
+    BTN_TEXT = "#1a202c"          # .btn color
+    BTN_BORDER = "#4a5568"       # .btn border
+    BTN_GREEN = "#38a169"        # .btn-green
+    BTN_GREEN_HOVER = "#2f855a"  # .btn-green:hover
+    BTN_DARK = "#2d3748"         # .btn-dark
+    BTN_DARK_HOVER = "#4a5568"   # .btn-dark:hover
+
+    # Status
+    GREEN = "#48bb78"            # conectado/sucesso
+    ORANGE = "#f6ad55"           # desconectado/aviso
+    GRAY = "#a0aec0"             # off/standby
+    LIGHT_BLUE = "#63b3ed"       # mão direita
+
+    # Texto
+    WHITE = "#ffffff"
+    TEXT_DARK = "#1a202c"
+    TEXT_LIGHT_GRAY = "#e2e8f0"
+
+    # Tabela
+    TABLE_HEADER_BG = "#e2e8f0"
+    TABLE_BODY_BG = "#f7fafc"
+    TABLE_BORDER = "#cbd5e0"
+
+    # Scrollbar
+    SCROLLBAR_TRACK = "#1a1f4e"
+    SCROLLBAR_THUMB = "#3b5bdb"
+
+    # Calibração
+    CALIB_BG = "rgba(45, 55, 72, 0.4)"
+    CALIB_BORDER = "#4a5568"
+
+    # Tamanhos (mantidos para compatibilidade)
     BORDER_RADIUS = 6
     PADDING_SMALL = "4px"
     PADDING_DEFAULT = "8px"
     PADDING_LARGE = "12px"
-    
+
+    # Aliases para compatibilidade com código existente
+    PRIMARY_DARK_GREEN = BLUE
+    PRIMARY_GREEN = BTN_GREEN
+    SECONDARY_GREEN = GREEN
+    LIGHT_GREEN = "#A8D8C8"
+    VERY_LIGHT_GREEN = PANEL_BG
+    CREAM = BG_DARK
+    DARK_TEXT = WHITE
+    LIGHT_GRAY = TEXT_LIGHT_GRAY
+    BORDER_COLOR = BTN_BORDER
+    SUCCESS_COLOR = GREEN
+    WARNING_COLOR = ORANGE
+    ERROR_COLOR = "#E74C3C"
+    INFO_COLOR = LIGHT_BLUE
+
     @staticmethod
     def get_stylesheet():
-        """Retorna o stylesheet completo da aplicação com design refinado"""
+        """Retorna o stylesheet completo - Tema azul escuro do bci_system.html"""
         return f"""
         /* ========== WIDGETS PRINCIPAIS ========== */
         QMainWindow {{
-            background-color: {Theme.CREAM};
+            background-color: {Theme.BG_DARK};
         }}
-        
+
         QWidget {{
-            background-color: {Theme.CREAM};
-            color: {Theme.DARK_TEXT};
+            background-color: {Theme.BG_DARK};
+            color: {Theme.WHITE};
+            font-family: 'Inter', 'Segoe UI', sans-serif;
         }}
-        
-        /* ========== TÍTULO E HEADERS ========== */
+
+        /* ========== LABELS ========== */
         QLabel {{
-            color: {Theme.DARK_TEXT};
+            color: {Theme.WHITE};
+            background-color: transparent;
         }}
-        
-        QMainWindow QLabel[title="true"] {{
-            color: {Theme.PRIMARY_DARK_GREEN};
-            font-size: 18pt;
-            font-weight: bold;
-            padding: 10px;
-        }}
-        
-        /* ========== INPUTS - DESIGN REFINADO ========== */
+
+        /* ========== INPUTS ========== */
         QLineEdit, QTextEdit, QSpinBox, QDoubleSpinBox, QDateEdit, QTimeEdit {{
-            background-color: {Theme.WHITE};
-            color: {Theme.DARK_TEXT};
-            border: 1px solid {Theme.LIGHT_GREEN};
+            background-color: {Theme.BTN_BG};
+            color: {Theme.TEXT_DARK};
+            border: 1px solid {Theme.BTN_BORDER};
             border-radius: 4px;
-            padding: 5px 8px;
-            font-size: 10pt;
-            selection-background-color: {Theme.PRIMARY_GREEN};
-            selection-color: white;
-            margin: 1px;
+            padding: 4px 8px;
+            font-size: 13px;
+            font-weight: 500;
             min-height: 24px;
         }}
-        
-        QLineEdit:focus, QTextEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, 
-        QDateEdit:focus, QTimeEdit:focus {{
-            border: 1px solid {Theme.PRIMARY_GREEN};
-            background-color: {Theme.VERY_LIGHT_GREEN};
-            outline: none;
+
+        QLineEdit:focus, QTextEdit:focus {{
+            border: 1px solid {Theme.BLUE};
         }}
-        
-        QLineEdit:hover, QTextEdit:hover, QSpinBox:hover, QDoubleSpinBox:hover,
-        QDateEdit:hover, QTimeEdit:hover {{
-            border: 1px solid {Theme.SECONDARY_GREEN};
-            background-color: {Theme.WHITE};
-        }}
-        
+
         /* ========== COMBOBOX ========== */
         QComboBox {{
-            background-color: {Theme.WHITE};
-            color: {Theme.DARK_TEXT};
-            border: 1px solid {Theme.LIGHT_GREEN};
+            background-color: {Theme.BTN_BG};
+            color: {Theme.TEXT_DARK};
+            border: 1px solid {Theme.BTN_BORDER};
             border-radius: 4px;
-            padding: 5px 8px;
-            font-size: 10pt;
-            margin: 1px;
+            padding: 4px 8px;
+            font-size: 13px;
+            font-weight: 500;
             min-height: 24px;
         }}
-        
-        QComboBox:focus {{
-            border: 1px solid {Theme.PRIMARY_GREEN};
-            background-color: {Theme.VERY_LIGHT_GREEN};
-        }}
-        
-        QComboBox:hover {{
-            border: 1px solid {Theme.SECONDARY_GREEN};
-        }}
-        
+
         QComboBox::drop-down {{
             border: none;
-            background-color: {Theme.VERY_LIGHT_GREEN};
+            background-color: {Theme.BTN_BG};
             width: 25px;
         }}
-        
+
         QComboBox::down-arrow {{
             image: none;
             border-left: 5px solid transparent;
             border-right: 5px solid transparent;
-            border-top: 6px solid {Theme.PRIMARY_GREEN};
+            border-top: 6px solid {Theme.BTN_BORDER};
             margin-right: 8px;
         }}
-        
+
         QComboBox QAbstractItemView {{
-            background-color: {Theme.WHITE};
-            color: {Theme.DARK_TEXT};
-            selection-background-color: {Theme.PRIMARY_GREEN};
-            selection-color: white;
-            border: 1px solid {Theme.LIGHT_GREEN};
-            border-radius: 4px;
+            background-color: {Theme.BTN_BG};
+            color: {Theme.TEXT_DARK};
+            selection-background-color: {Theme.BLUE};
+            selection-color: {Theme.WHITE};
+            border: 1px solid {Theme.BTN_BORDER};
         }}
-        
-        /* ========== BUTTONS - DESIGN PREMIUM ========== */
+
+        /* ========== BUTTONS ========== */
         QPushButton {{
-            background-color: {Theme.PRIMARY_GREEN};
-            color: {Theme.WHITE};
-            border: none;
-            border-radius: 4px;
-            padding: 6px 12px;
-            font-weight: bold;
-            font-size: 10pt;
+            background-color: {Theme.BTN_BG};
+            color: {Theme.TEXT_DARK};
+            border: 1px solid {Theme.BTN_BORDER};
+            border-radius: 5px;
+            padding: 7px 18px;
+            font-weight: 600;
+            font-size: 13px;
             min-height: 26px;
-            outline: none;
         }}
-        
+
         QPushButton:hover {{
-            background-color: {Theme.SECONDARY_GREEN};
+            background-color: {Theme.BTN_BG_HOVER};
         }}
-        
+
         QPushButton:pressed {{
-            background-color: {Theme.PRIMARY_DARK_GREEN};
+            background-color: {Theme.BTN_BORDER};
         }}
-        
+
         QPushButton:disabled {{
-            background-color: {Theme.BORDER_COLOR};
-            color: {Theme.LIGHT_GRAY};
+            background-color: {Theme.BTN_DARK};
+            color: {Theme.GRAY};
         }}
-        
-        /* Botões secundários */
-        QPushButton#secondaryButton {{
-            background-color: {Theme.LIGHT_GREEN};
-            color: {Theme.PRIMARY_DARK_GREEN};
-            font-weight: bold;
-        }}
-        
-        QPushButton#secondaryButton:hover {{
-            background-color: {Theme.SECONDARY_GREEN};
-            color: {Theme.WHITE};
-        }}
-        
-        /* Botões de ação destrutiva */
-        QPushButton#destructiveButton {{
-            background-color: {Theme.ERROR_COLOR};
-        }}
-        
-        QPushButton#destructiveButton:hover {{
-            background-color: #C0392B;
-        }}
-        
+
         /* ========== GROUPBOX ========== */
         QGroupBox {{
-            color: {Theme.PRIMARY_DARK_GREEN};
-            border: 1px solid {Theme.LIGHT_GREEN};
-            border-radius: 4px;
+            color: {Theme.WHITE};
+            border: 2px solid {Theme.BTN_BORDER};
+            border-radius: 6px;
             margin-top: 10px;
             padding-top: 8px;
             font-weight: bold;
             font-size: 10pt;
-            background-color: {Theme.VERY_LIGHT_GREEN};
+            background-color: {Theme.CALIB_BG};
         }}
-        
+
         QGroupBox::title {{
             subcontrol-origin: margin;
             left: 10px;
             padding: 0 6px 0 6px;
-            background-color: {Theme.VERY_LIGHT_GREEN};
+            color: {Theme.WHITE};
         }}
-        
+
         /* ========== TABS ========== */
         QTabWidget::pane {{
-            border: 1px solid {Theme.LIGHT_GREEN};
-            background-color: {Theme.WHITE};
-            border-radius: 4px;
+            border: 2px solid {Theme.BLUE};
+            border-radius: 0 8px 8px 8px;
+            background-color: {Theme.PANEL_BG};
         }}
-        
+
         QTabBar::tab {{
-            background-color: {Theme.VERY_LIGHT_GREEN};
-            color: {Theme.DARK_TEXT};
-            padding: 8px 20px;
-            margin-right: 2px;
-            border: 1px solid {Theme.LIGHT_GREEN};
-            border-bottom: none;
-            border-top-left-radius: 4px;
-            border-top-right-radius: 4px;
-            font-weight: bold;
-            font-size: 10pt;
-        }}
-        
-        QTabBar::tab:hover {{
-            background-color: {Theme.LIGHT_GREEN};
-        }}
-        
-        QTabBar::tab:selected {{
-            background-color: {Theme.PRIMARY_GREEN};
+            background-color: transparent;
             color: {Theme.WHITE};
-            border: 1px solid {Theme.PRIMARY_GREEN};
+            padding: 8px 18px;
+            border: 2px solid {Theme.BLUE};
+            border-bottom: none;
+            border-top-left-radius: 6px;
+            border-top-right-radius: 6px;
+            font-weight: 600;
+            font-size: 14px;
         }}
-        
+
+        QTabBar::tab:hover {{
+            background-color: {Theme.BLUE_TRANS};
+        }}
+
+        QTabBar::tab:selected {{
+            background-color: {Theme.BLUE};
+            color: {Theme.WHITE};
+        }}
+
         /* ========== TABELAS ========== */
         QTableWidget {{
-            background-color: {Theme.WHITE};
-            alternate-background-color: {Theme.VERY_LIGHT_GREEN};
-            gridline-color: {Theme.LIGHT_GREEN};
-            border: 1px solid {Theme.LIGHT_GREEN};
-            border-radius: 4px;
-            font-size: 9pt;
+            background-color: {Theme.TABLE_BODY_BG};
+            alternate-background-color: {Theme.WHITE};
+            gridline-color: {Theme.TABLE_BORDER};
+            border: 1px solid {Theme.TABLE_BORDER};
+            font-size: 13px;
+            color: {Theme.TEXT_DARK};
         }}
-        
+
         QTableWidget::item {{
-            padding: 4px;
-            border-bottom: 1px solid {Theme.LIGHT_GREEN};
+            padding: 7px 12px;
+            border: 1px solid {Theme.TABLE_BORDER};
+            color: {Theme.TEXT_DARK};
         }}
-        
+
         QTableWidget::item:selected {{
-            background-color: {Theme.SECONDARY_GREEN};
+            background-color: {Theme.BLUE};
             color: {Theme.WHITE};
         }}
-        
+
         QHeaderView::section {{
-            background-color: {Theme.PRIMARY_GREEN};
-            color: {Theme.WHITE};
-            padding: 4px;
-            border: none;
-            font-weight: bold;
+            background-color: {Theme.TABLE_HEADER_BG};
+            color: {Theme.TEXT_DARK};
+            padding: 8px 12px;
+            border: 1px solid {Theme.TABLE_BORDER};
+            font-weight: 800;
+            font-size: 13px;
+            text-transform: uppercase;
         }}
-        
+
         /* ========== SCROLLBAR ========== */
         QScrollBar:vertical {{
-            background-color: {Theme.VERY_LIGHT_GREEN};
-            width: 12px;
-            border-radius: 6px;
+            background-color: {Theme.SCROLLBAR_TRACK};
+            width: 10px;
+            border-radius: 5px;
         }}
-        
+
         QScrollBar::handle:vertical {{
-            background-color: {Theme.LIGHT_GREEN};
-            border-radius: 6px;
+            background-color: {Theme.SCROLLBAR_THUMB};
+            border-radius: 5px;
             min-height: 20px;
         }}
-        
-        QScrollBar::handle:vertical:hover {{
-            background-color: {Theme.SECONDARY_GREEN};
-        }}
-        
+
         QScrollBar:horizontal {{
-            background-color: {Theme.VERY_LIGHT_GREEN};
-            height: 12px;
-            border-radius: 6px;
+            background-color: {Theme.SCROLLBAR_TRACK};
+            height: 10px;
+            border-radius: 5px;
         }}
-        
+
         QScrollBar::handle:horizontal {{
-            background-color: {Theme.LIGHT_GREEN};
-            border-radius: 6px;
+            background-color: {Theme.SCROLLBAR_THUMB};
+            border-radius: 5px;
             min-width: 20px;
         }}
-        
-        QScrollBar::handle:horizontal:hover {{
-            background-color: {Theme.SECONDARY_GREEN};
+
+        QScrollBar::add-line, QScrollBar::sub-line {{
+            height: 0px;
+            width: 0px;
         }}
-        
+
         /* ========== STATUSBAR ========== */
         QStatusBar {{
-            background-color: {Theme.PRIMARY_DARK_GREEN};
+            background-color: {Theme.PANEL_BG};
             color: {Theme.WHITE};
-            border-top: 2px solid {Theme.LIGHT_GREEN};
+            border-top: 2px solid {Theme.BLUE};
             padding: 5px;
         }}
-        
+
         /* ========== DIALOGS ========== */
         QDialog {{
-            background-color: {Theme.CREAM};
+            background-color: {Theme.BG_DARK};
         }}
-        
+
         QMessageBox {{
-            background-color: {Theme.CREAM};
+            background-color: {Theme.BG_DARK};
         }}
-        
+
         QMessageBox QLabel {{
-            color: {Theme.DARK_TEXT};
+            color: {Theme.WHITE};
         }}
-        
-        /* ========== SPINBOX / ARROWS ========== */
-        QSpinBox::up-button, QDoubleSpinBox::up-button {{
-            background-color: {Theme.VERY_LIGHT_GREEN};
-            border: 1px solid {Theme.LIGHT_GREEN};
-            border-bottom: none;
-            width: 20px;
+
+        /* ========== TEXTAREA ========== */
+        QTextEdit {{
+            background-color: {Theme.BTN_BG};
+            color: {Theme.TEXT_DARK};
+            border: 1px solid {Theme.BTN_BORDER};
+            border-radius: 4px;
+            padding: 10px;
+            font-size: 13px;
+            font-weight: 500;
         }}
-        
-        QSpinBox::down-button, QDoubleSpinBox::down-button {{
-            background-color: {Theme.VERY_LIGHT_GREEN};
-            border: 1px solid {Theme.LIGHT_GREEN};
-            border-top: none;
-            width: 20px;
-        }}
-        
-        QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover,
-        QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {{
-            background-color: {Theme.LIGHT_GREEN};
-        }}
-        
-        /* ========== CHECKBOX & RADIO ========== */
+
+        /* ========== CHECKBOX ========== */
         QCheckBox, QRadioButton {{
-            color: {Theme.DARK_TEXT};
+            color: {Theme.WHITE};
             spacing: 8px;
-            margin: 2px;
         }}
-        
+
         QCheckBox::indicator, QRadioButton::indicator {{
             width: 18px;
             height: 18px;
         }}
-        
-        QCheckBox::indicator:unchecked, QRadioButton::indicator:unchecked {{
-            background-color: {Theme.WHITE};
-            border: 2px solid {Theme.LIGHT_GREEN};
+
+        QCheckBox::indicator:unchecked {{
+            background-color: {Theme.BTN_BG};
+            border: 2px solid {Theme.BTN_BORDER};
             border-radius: 3px;
         }}
-        
-        QCheckBox::indicator:checked, QRadioButton::indicator:checked {{
-            background-color: {Theme.PRIMARY_GREEN};
-            border: 2px solid {Theme.PRIMARY_GREEN};
+
+        QCheckBox::indicator:checked {{
+            background-color: {Theme.BLUE};
+            border: 2px solid {Theme.BLUE};
             border-radius: 3px;
         }}
-        
-        QCheckBox::indicator:hover, QRadioButton::indicator:hover {{
-            border: 2px solid {Theme.SECONDARY_GREEN};
-        }}
-        
+
         /* ========== PROGRESSBAR ========== */
         QProgressBar {{
-            background-color: {Theme.VERY_LIGHT_GREEN};
-            border: 2px solid {Theme.LIGHT_GREEN};
-            border-radius: {Theme.BORDER_RADIUS}px;
+            background-color: {Theme.BTN_DARK};
+            border: 2px solid {Theme.BTN_BORDER};
+            border-radius: 6px;
             text-align: center;
-            color: {Theme.DARK_TEXT};
-            padding: 2px;
+            color: {Theme.WHITE};
         }}
-        
+
         QProgressBar::chunk {{
-            background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                stop:0 {Theme.PRIMARY_GREEN}, stop:1 {Theme.SECONDARY_GREEN});
+            background-color: {Theme.BLUE};
             border-radius: 4px;
         }}
-        
+
         /* ========== TOOLTIPS ========== */
         QToolTip {{
-            background-color: {Theme.PRIMARY_DARK_GREEN};
+            background-color: {Theme.PANEL_BG};
             color: {Theme.WHITE};
-            border: 1px solid {Theme.PRIMARY_GREEN};
+            border: 1px solid {Theme.BLUE};
             border-radius: 4px;
             padding: 4px;
         }}
-        
-        /* ========== MENUBAR E MENUS ========== */
+
+        /* ========== MENUBAR ========== */
         QMenuBar {{
-            background-color: {Theme.CREAM};
-            color: {Theme.DARK_TEXT};
-            border-bottom: 2px solid {Theme.LIGHT_GREEN};
-        }}
-        
-        QMenuBar::item:selected {{
-            background-color: {Theme.LIGHT_GREEN};
-        }}
-        
-        QMenu {{
-            background-color: {Theme.WHITE};
-            color: {Theme.DARK_TEXT};
-            border: 1px solid {Theme.LIGHT_GREEN};
-        }}
-        
-        QMenu::item:selected {{
-            background-color: {Theme.PRIMARY_GREEN};
+            background-color: {Theme.BG_DARK};
             color: {Theme.WHITE};
+            border-bottom: 2px solid {Theme.BLUE};
+        }}
+
+        QMenuBar::item:selected {{
+            background-color: {Theme.BLUE};
+        }}
+
+        QMenu {{
+            background-color: {Theme.PANEL_BG};
+            color: {Theme.WHITE};
+            border: 1px solid {Theme.BLUE};
+        }}
+
+        QMenu::item:selected {{
+            background-color: {Theme.BLUE};
+            color: {Theme.WHITE};
+        }}
+
+        /* ========== SPINBOX ========== */
+        QSpinBox::up-button, QDoubleSpinBox::up-button {{
+            background-color: {Theme.BTN_BG};
+            border: 1px solid {Theme.BTN_BORDER};
+            width: 20px;
+        }}
+
+        QSpinBox::down-button, QDoubleSpinBox::down-button {{
+            background-color: {Theme.BTN_BG};
+            border: 1px solid {Theme.BTN_BORDER};
+            width: 20px;
         }}
         """
 
 
 def apply_theme(app):
-    """Aplica o tema à aplicação Qt de forma profissional"""
+    """Aplica o tema à aplicação Qt"""
     app.setStyle('Fusion')
     app.setStyleSheet(Theme.get_stylesheet())

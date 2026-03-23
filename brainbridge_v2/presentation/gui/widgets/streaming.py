@@ -148,143 +148,216 @@ class StreamingWidget(QWidget):
         
     def setup_ui(self):
         """Configura a interface pixel-perfect conforme bci_system.html"""
-        layout = QVBoxLayout()
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(0)
-
-        # Cores do HTML
-        DARK_BG = "#0a0e27"
+        # Cores exatas do HTML
         PANEL_BG = "#111640"
         BLUE = "#3b5bdb"
         GREEN = "#48bb78"
         ORANGE = "#f6ad55"
         GRAY = "#a0aec0"
         LIGHT_GRAY = "#e2e8f0"
-        DARK_GRAY = "#2d3748"
         WHITE = "#ffffff"
         TEXT_DARK = "#1a202c"
+        BTN_STYLE = f"padding: 7px 18px; font-size: 13px; font-weight: 600; background: {LIGHT_GRAY}; color: {TEXT_DARK}; border: 1px solid #4a5568; border-radius: 5px;"
+        BTN_GREEN_STYLE = f"padding: 7px 18px; font-size: 13px; font-weight: 600; background: #38a169; color: {WHITE}; border: 1px solid #2f855a; border-radius: 5px;"
 
-        # ============ TOP ROW: 3 Colunas (esquerda, centro, direita) ============
+        layout = QVBoxLayout()
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(0)
+
+        # ============ TOP ROW: 3 colunas iguais ============
         top_container = QWidget()
         top_container.setStyleSheet(f"background-color: {PANEL_BG};")
         top_layout = QHBoxLayout()
-        top_layout.setContentsMargins(20, 16, 20, 16)
-        top_layout.setSpacing(20)
+        top_layout.setContentsMargins(20, 16, 20, 12)
+        top_layout.setSpacing(0)
 
-        # --- COL LEFT ---
+        # --- COL LEFT: Paciente + Baseline/Jogo + Calibração ---
         col_left = QVBoxLayout()
         col_left.setSpacing(10)
 
-        patient_label = QLabel("Paciente: ####")
-        patient_label.setStyleSheet(f"color: {WHITE}; font-size: 18pt; font-weight: 800;")
-        col_left.addWidget(patient_label)
+        self.patient_display_label = QLabel("Paciente: ####")
+        self.patient_display_label.setStyleSheet(f"color: {WHITE}; font-size: 22px; font-weight: 800; letter-spacing: 0.5px;")
+        col_left.addWidget(self.patient_display_label)
 
-        # Botões Baseline/Jogo
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(12)
-        btn_baseline = QPushButton("Baseline")
-        btn_baseline.setStyleSheet(f"padding: 7px 18px; font-size: 13px; font-weight: 600; background: {LIGHT_GRAY}; color: {TEXT_DARK}; border: 1px solid #4a5568; border-radius: 5px;")
-        btn_jogo = QPushButton("Jogo")
-        btn_jogo.setStyleSheet(f"padding: 7px 18px; font-size: 13px; font-weight: 600; background: {LIGHT_GRAY}; color: {TEXT_DARK}; border: 1px solid #4a5568; border-radius: 5px;")
-        btn_row.addWidget(btn_baseline)
-        btn_row.addWidget(btn_jogo)
-        col_left.addLayout(btn_row)
+        # Baseline/Jogo stacked + Calibração box lado a lado
+        left_mid = QHBoxLayout()
+        left_mid.setSpacing(14)
+        left_mid.setContentsMargins(0, 6, 0, 0)
+
+        # Baseline/Jogo empilhados
+        task_col = QVBoxLayout()
+        task_col.setSpacing(10)
+        self.btn_baseline = QPushButton("Baseline")
+        self.btn_baseline.setStyleSheet(f"padding: 8px 20px; font-size: 14px; font-weight: 700; background: {LIGHT_GRAY}; color: {TEXT_DARK}; border: 1px solid #4a5568; border-radius: 5px;")
+        self.btn_baseline.clicked.connect(lambda: self._set_task("Baseline"))
+        self.btn_jogo = QPushButton("Jogo")
+        self.btn_jogo.setStyleSheet(f"padding: 8px 24px; font-size: 14px; font-weight: 700; background: {LIGHT_GRAY}; color: {TEXT_DARK}; border: 1px solid #4a5568; border-radius: 5px;")
+        self.btn_jogo.clicked.connect(lambda: self._set_task("Jogo"))
+        task_col.addWidget(self.btn_baseline)
+        task_col.addWidget(self.btn_jogo)
+        left_mid.addLayout(task_col)
 
         # Calibração box
-        calib_box = QGroupBox()
-        calib_box.setStyleSheet(f"border: 2px solid #4a5568; border-radius: 6px; background: rgba(45, 55, 72, 0.4);")
-        calib_layout = QVBoxLayout()
-        calib_layout.setContentsMargins(8, 8, 8, 8)
-        calib_layout.setSpacing(6)
+        calib_frame = QWidget()
+        calib_frame.setStyleSheet(f"border: 2px solid #4a5568; border-radius: 6px; background: rgba(45, 55, 72, 102);")
+        calib_inner = QVBoxLayout()
+        calib_inner.setContentsMargins(14, 8, 14, 8)
+        calib_inner.setSpacing(6)
+        self.btn_iniciar_treino = QPushButton("Iniciar Treino")
+        self.btn_iniciar_treino.setStyleSheet(f"font-size: 13px; font-weight: 600; background: {LIGHT_GRAY}; color: {TEXT_DARK}; border: 1px solid #4a5568; border-radius: 5px; padding: 6px 14px;")
+        self.btn_iniciar_treino.clicked.connect(lambda: self._set_task("Treino"))
         calib_title = QLabel("Calibração")
-        calib_title.setStyleSheet(f"font-size: 16px; font-weight: 700; color: {WHITE};")
-        calib_layout.addWidget(calib_title)
-        calib_btns = QHBoxLayout()
-        calib_btns.setSpacing(8)
-        btn_esq = QPushButton("Esquerda")
-        btn_esq.setStyleSheet(f"padding: 7px 22px; font-size: 13px; font-weight: 600; background: {LIGHT_GRAY}; color: {TEXT_DARK}; border-radius: 5px;")
-        btn_dir = QPushButton("Direita")
-        btn_dir.setStyleSheet(f"padding: 7px 22px; font-size: 13px; font-weight: 600; background: {LIGHT_GRAY}; color: {TEXT_DARK}; border-radius: 5px;")
-        calib_btns.addWidget(btn_esq)
-        calib_btns.addWidget(btn_dir)
-        calib_layout.addLayout(calib_btns)
-        calib_box.setLayout(calib_layout)
-        col_left.addWidget(calib_box)
-        col_left.addStretch()
+        calib_title.setStyleSheet(f"font-size: 16px; font-weight: 700; color: {WHITE}; border: none;")
+        calib_title.setAlignment(Qt.AlignCenter)
+        calib_btns_row = QHBoxLayout()
+        calib_btns_row.setSpacing(8)
+        self.btn_calib_esq = QPushButton("Esquerda")
+        self.btn_calib_esq.setStyleSheet(f"font-size: 12px; font-weight: 600; background: {LIGHT_GRAY}; color: {TEXT_DARK}; border: 1px solid #4a5568; border-radius: 5px; padding: 6px 14px;")
+        self.btn_calib_esq.clicked.connect(lambda: self.add_marker("T1"))
+        self.btn_calib_dir = QPushButton("Direita")
+        self.btn_calib_dir.setStyleSheet(f"font-size: 12px; font-weight: 600; background: {LIGHT_GRAY}; color: {TEXT_DARK}; border: 1px solid #4a5568; border-radius: 5px; padding: 6px 14px;")
+        self.btn_calib_dir.clicked.connect(lambda: self.add_marker("T2"))
+        calib_btns_row.addWidget(self.btn_calib_esq)
+        calib_btns_row.addWidget(self.btn_calib_dir)
+        calib_inner.addWidget(self.btn_iniciar_treino)
+        calib_inner.addWidget(calib_title)
+        calib_inner.addLayout(calib_btns_row)
+        calib_frame.setLayout(calib_inner)
+        left_mid.addWidget(calib_frame)
 
+        col_left.addLayout(left_mid)
+        col_left.addStretch()
         top_layout.addLayout(col_left, 1)
 
-        # --- COL CENTER ---
+        # --- COL CENTER: Status + Conectar + EEG/VR/ORTESE ---
         col_center = QVBoxLayout()
         col_center.setSpacing(6)
         col_center.setContentsMargins(10, 0, 0, 0)
 
         status_title = QLabel("Status")
-        status_title.setStyleSheet(f"color: {WHITE}; font-size: 18pt; font-weight: 800;")
+        status_title.setStyleSheet(f"color: {WHITE}; font-size: 22px; font-weight: 800;")
         col_center.addWidget(status_title)
 
-        self.connect_btn = QPushButton("🔗 Conectar")
-        self.connect_btn.setStyleSheet(f"padding: 7px 18px; font-size: 13px; font-weight: 600; background: {GREEN}; color: {WHITE}; border: 1px solid #2f855a; border-radius: 5px;")
+        self.connect_btn = QPushButton("Conectar")
+        self.connect_btn.setStyleSheet(BTN_GREEN_STYLE)
         self.connect_btn.clicked.connect(self.toggle_connection)
         col_center.addWidget(self.connect_btn)
 
         status_list = QVBoxLayout()
         status_list.setSpacing(3)
         status_list.setContentsMargins(0, 4, 0, 0)
-
-        self.status_eeg = QLabel("EEG - Conectado")
-        self.status_eeg.setStyleSheet(f"color: {GREEN}; font-size: 14px; font-weight: 700;")
-        self.status_vr = QLabel("VR - Desconectado")
-        self.status_vr.setStyleSheet(f"color: {ORANGE}; font-size: 14px; font-weight: 700;")
+        self.status_eeg = QLabel("EEG - Standby")
+        self.status_eeg.setStyleSheet(f"color: {WHITE}; font-size: 14px; font-weight: 700;")
+        self.status_vr = QLabel("VR - Standby")
+        self.status_vr.setStyleSheet(f"color: {WHITE}; font-size: 14px; font-weight: 700;")
         self.status_ortese = QLabel("ORTESE - OFF")
         self.status_ortese.setStyleSheet(f"color: {GRAY}; font-size: 14px; font-weight: 700;")
-
         status_list.addWidget(self.status_eeg)
         status_list.addWidget(self.status_vr)
         status_list.addWidget(self.status_ortese)
         col_center.addLayout(status_list)
         col_center.addStretch()
-
         top_layout.addLayout(col_center, 1)
 
-        # --- COL RIGHT ---
+        # --- COL RIGHT: Gravação + IA Table ---
         col_right = QVBoxLayout()
         col_right.setSpacing(8)
 
-        gravacao_title = QLabel("Gravação")
-        gravacao_title.setStyleSheet(f"color: {WHITE}; font-size: 16pt; font-weight: 800;")
-        col_right.addWidget(gravacao_title)
+        # Top right: Gravação à esquerda, Tabela IA à direita
+        right_top = QHBoxLayout()
+        right_top.setSpacing(16)
 
-        # Paciente input
+        # Gravação controls
+        grav_col = QVBoxLayout()
+        grav_col.setSpacing(6)
+        gravacao_title = QLabel("Gravação")
+        gravacao_title.setStyleSheet(f"color: {WHITE}; font-size: 18px; font-weight: 800;")
+        grav_col.addWidget(gravacao_title)
+
         pac_row = QHBoxLayout()
         pac_row.setSpacing(8)
         pac_label = QLabel("Paciente")
         pac_label.setStyleSheet(f"color: {WHITE}; font-size: 14px; font-weight: 700;")
-        self.pac_input = QLineEdit("#####")
-        self.pac_input.setStyleSheet(f"padding: 4px 8px; font-size: 13px; background: {LIGHT_GRAY}; color: {TEXT_DARK}; border: 1px solid #4a5568; border-radius: 4px; width: 70px; font-weight: 600;")
+        self.patient_combo = QComboBox()
+        self.patient_combo.setStyleSheet(f"padding: 4px 8px; font-size: 13px; background: {LIGHT_GRAY}; color: {TEXT_DARK}; border: 1px solid #4a5568; border-radius: 4px; font-weight: 600; max-width: 100px;")
+        self.patient_combo.currentTextChanged.connect(self._on_patient_changed)
         pac_row.addWidget(pac_label)
-        pac_row.addWidget(self.pac_input)
-        col_right.addLayout(pac_row)
+        pac_row.addWidget(self.patient_combo)
+        grav_col.addLayout(pac_row)
 
-        # Atualizar button
-        btn_atualizar = QPushButton("Atualizar")
-        btn_atualizar.setStyleSheet(f"padding: 5px 14px; font-size: 12px; font-weight: 600; background: {LIGHT_GRAY}; color: {TEXT_DARK}; border-radius: 5px;")
-        col_right.addWidget(btn_atualizar)
+        self.refresh_patients_btn = QPushButton("Atualizar")
+        self.refresh_patients_btn.setStyleSheet(f"padding: 5px 14px; font-size: 12px; font-weight: 600; background: {LIGHT_GRAY}; color: {TEXT_DARK}; border: 1px solid #4a5568; border-radius: 5px;")
+        self.refresh_patients_btn.clicked.connect(self.refresh_patients)
+        grav_col.addWidget(self.refresh_patients_btn)
 
-        # Gravação actions
-        gravacao_actions = QHBoxLayout()
-        gravacao_actions.setSpacing(10)
-        btn_iniciar = QPushButton("Iniciar Gravação")
-        btn_iniciar.setStyleSheet(f"padding: 7px 18px; font-size: 13px; font-weight: 600; background: {GREEN}; color: {WHITE}; border: 1px solid #2f855a; border-radius: 5px;")
-        self.record_btn = btn_iniciar
+        grav_actions = QHBoxLayout()
+        grav_actions.setSpacing(10)
+        self.record_btn = QPushButton("Iniciar Gravação")
+        self.record_btn.setStyleSheet(f"padding: 5px 14px; font-size: 12px; font-weight: 600; background: #38a169; color: {WHITE}; border: 1px solid #2f855a; border-radius: 5px;")
         self.record_btn.clicked.connect(self.toggle_recording)
+        self.record_btn.setEnabled(False)
         self.gravacao_status = QLabel("Não Gravando")
         self.gravacao_status.setStyleSheet(f"color: {GRAY}; font-size: 12px; font-weight: 600;")
-        gravacao_actions.addWidget(btn_iniciar)
-        gravacao_actions.addWidget(self.gravacao_status)
-        col_right.addLayout(gravacao_actions)
-        col_right.addStretch()
+        grav_actions.addWidget(self.record_btn)
+        grav_actions.addWidget(self.gravacao_status)
+        grav_col.addLayout(grav_actions)
+        right_top.addLayout(grav_col)
 
+        # IA Table (hands + dots)
+        ia_col = QVBoxLayout()
+        ia_col.setSpacing(4)
+        ia_col.setContentsMargins(0, 0, 0, 0)
+
+        # Hands
+        hands_row = QHBoxLayout()
+        hands_row.setSpacing(24)
+        hands_row.addStretch()
+        hand_left = QLabel("✋")
+        hand_left.setStyleSheet(f"font-size: 32px; color: {ORANGE};")
+        hand_right = QLabel("🤚")
+        hand_right.setStyleSheet(f"font-size: 32px; color: #63b3ed;")
+        hands_row.addWidget(hand_left)
+        hands_row.addWidget(hand_right)
+        hands_row.addStretch()
+        ia_col.addLayout(hands_row)
+
+        # IA/Paciente/Tarefa/Acertos table
+        ia_table = QGridLayout()
+        ia_table.setSpacing(0)
+        ia_table.setContentsMargins(0, 4, 0, 0)
+
+        dot_style = f"color: #2d3748; font-size: 14px;"
+        label_style = f"color: {WHITE}; font-size: 13px; font-weight: 700;"
+        acertos_style = f"color: {ORANGE}; font-size: 13px; font-weight: 800;"
+        val_style = f"color: {WHITE}; font-size: 18px; font-weight: 800;"
+
+        rows = [
+            ("IA", label_style, "●", dot_style, "●", dot_style),
+            ("Paciente", label_style, "●", dot_style, "●", dot_style),
+            ("Tarefa", label_style, "●", dot_style, "●", dot_style),
+            ("Acertos", acertos_style, "0", val_style, "0", val_style),
+        ]
+        self.ia_table_cells = {}
+        for r, (name, ls, v1, v1s, v2, v2s) in enumerate(rows):
+            lbl = QLabel(name)
+            lbl.setStyleSheet(ls)
+            lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            c1 = QLabel(v1)
+            c1.setStyleSheet(v1s)
+            c1.setAlignment(Qt.AlignCenter)
+            c2 = QLabel(v2)
+            c2.setStyleSheet(v2s)
+            c2.setAlignment(Qt.AlignCenter)
+            ia_table.addWidget(lbl, r, 0)
+            ia_table.addWidget(c1, r, 1)
+            ia_table.addWidget(c2, r, 2)
+            self.ia_table_cells[name] = (lbl, c1, c2)
+
+        ia_col.addLayout(ia_table)
+        right_top.addLayout(ia_col)
+
+        col_right.addLayout(right_top)
+        col_right.addStretch()
         top_layout.addLayout(col_right, 1)
 
         top_container.setLayout(top_layout)
@@ -292,117 +365,136 @@ class StreamingWidget(QWidget):
 
         # ============ MARCADORES BAR ============
         marcadores_bar = QWidget()
-        marcadores_bar.setStyleSheet(f"background-color: {PANEL_BG}; border-top: 2px solid {BLUE}; border-bottom: 2px solid {BLUE};")
-        marcadores_layout = QHBoxLayout()
-        marcadores_layout.setContentsMargins(20, 10, 20, 10)
-        marcadores_layout.setSpacing(30)
+        marcadores_bar.setStyleSheet(f"background-color: rgba(17, 22, 64, 204); border-top: 2px solid {BLUE}; border-bottom: 2px solid {BLUE};")
+        marc_layout = QHBoxLayout()
+        marc_layout.setContentsMargins(20, 10, 20, 10)
 
-        # Esquerda
-        marcadores_left = QHBoxLayout()
-        marcadores_left.setSpacing(30)
-        marcador_text = QLabel("Marcadores - T1: # | T2: #")
-        marcador_text.setStyleSheet(f"color: {WHITE}; font-size: 18px; font-weight: 800;")
-        marcadores_left.addWidget(marcador_text)
+        self.marcador_text = QLabel("Marcadores -  T1: 0  |  T2: 0")
+        self.marcador_text.setStyleSheet(f"color: {WHITE}; font-size: 18px; font-weight: 800;")
+        marc_layout.addWidget(self.marcador_text)
+        marc_layout.addStretch()
 
-        # Direita - Teste Manual
-        teste_manual_label = QLabel("Teste Manual")
-        teste_manual_label.setStyleSheet(f"color: {WHITE}; font-size: 16px; font-weight: 800;")
-        teste_btns = QHBoxLayout()
-        teste_btns.setSpacing(8)
-        btn_t1_teste = QPushButton("T1")
-        btn_t1_teste.setStyleSheet(f"padding: 6px 20px; font-size: 13px; font-weight: 700; background: #4a5568; color: {WHITE}; border: 1px solid #718096; border-radius: 5px;")
-        btn_t2_teste = QPushButton("T2")
-        btn_t2_teste.setStyleSheet(f"padding: 6px 20px; font-size: 13px; font-weight: 700; background: {BLUE}; color: {WHITE}; border: 1px solid #364fc7; border-radius: 5px;")
-        teste_btns.addWidget(btn_t1_teste)
-        teste_btns.addWidget(btn_t2_teste)
+        teste_label = QLabel("Teste Manual")
+        teste_label.setStyleSheet(f"color: {WHITE}; font-size: 16px; font-weight: 800;")
+        marc_layout.addWidget(teste_label)
+        marc_layout.addSpacing(12)
 
-        marcadores_right = QHBoxLayout()
-        marcadores_right.setSpacing(12)
-        marcadores_right.addWidget(teste_manual_label)
-        marcadores_right.addLayout(teste_btns)
+        self.t1_btn = QPushButton("T1")
+        self.t1_btn.setStyleSheet(f"padding: 6px 20px; font-size: 13px; font-weight: 700; background: #4a5568; color: {WHITE}; border: 1px solid #718096; border-radius: 5px;")
+        self.t1_btn.clicked.connect(lambda: self.add_marker("T1"))
+        self.t2_btn = QPushButton("T2")
+        self.t2_btn.setStyleSheet(f"padding: 6px 20px; font-size: 13px; font-weight: 700; background: {BLUE}; color: {WHITE}; border: 1px solid #364fc7; border-radius: 5px;")
+        self.t2_btn.clicked.connect(lambda: self.add_marker("T2"))
+        marc_layout.addWidget(self.t1_btn)
+        marc_layout.addSpacing(8)
+        marc_layout.addWidget(self.t2_btn)
 
-        marcadores_layout.addLayout(marcadores_left)
-        marcadores_layout.addStretch()
-        marcadores_layout.addLayout(marcadores_right)
-        marcadores_bar.setLayout(marcadores_layout)
+        marcadores_bar.setLayout(marc_layout)
         layout.addWidget(marcadores_bar)
 
         # ============ BCI STATUS ============
-        bci_status = QLabel("📊 Sistema BCI inicializado")
-        bci_status.setStyleSheet(f"color: {GREEN}; font-size: 18pt; font-weight: 800; padding: 14px 0 8px 0; text-align: center;")
-        bci_status.setAlignment(Qt.AlignCenter)
-        layout.addWidget(bci_status)
+        self.bci_status_label = QLabel("Sistema BCI inicializado")
+        self.bci_status_label.setStyleSheet(f"color: {GREEN}; font-size: 22px; font-weight: 800; letter-spacing: 0.5px; padding: 14px 0 8px 0;")
+        self.bci_status_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.bci_status_label)
 
         # ============ EEG CHART ============
-        eeg_chart_container = QWidget()
-        eeg_chart_container.setStyleSheet(f"background: {WHITE}; border-radius: 4px;")
-        eeg_chart_layout = QVBoxLayout()
-        eeg_chart_layout.setContentsMargins(10, 10, 10, 10)
-        eeg_chart_layout.setSpacing(4)
-
+        eeg_container = QWidget()
+        eeg_container.setStyleSheet(f"background: {WHITE}; border-radius: 4px; margin: 0 20px 12px 20px;")
+        eeg_layout = QVBoxLayout()
+        eeg_layout.setContentsMargins(10, 10, 10, 10)
+        eeg_layout.setSpacing(4)
         chart_title = QLabel("Dados EEG em Tempo Real")
-        chart_title.setStyleSheet(f"color: {TEXT_DARK}; font-size: 13px; font-weight: 600; text-align: center;")
+        chart_title.setStyleSheet(f"color: {TEXT_DARK}; font-size: 13px; font-weight: 600;")
         chart_title.setAlignment(Qt.AlignCenter)
-        eeg_chart_layout.addWidget(chart_title)
-
+        eeg_layout.addWidget(chart_title)
         self.plot_widget = EEGPlotWidget()
         self.plot_widget.setMinimumHeight(300)
-        eeg_chart_layout.addWidget(self.plot_widget)
-
-        eeg_chart_container.setLayout(eeg_chart_layout)
-        layout.addWidget(eeg_chart_container)
+        eeg_layout.addWidget(self.plot_widget)
+        eeg_container.setLayout(eeg_layout)
+        layout.addWidget(eeg_container)
 
         # ============ SESSION TIMER ============
-        session_timer = QLabel("Sessão: 00:00:00")
-        session_timer.setStyleSheet(f"color: {WHITE}; font-size: 16pt; font-weight: 800; padding: 12px 0 16px 0; text-align: center;")
-        session_timer.setAlignment(Qt.AlignCenter)
-        self.session_timer_label = session_timer
-        layout.addWidget(session_timer)
+        self.session_timer_label = QLabel("Sessão: 00:00:00")
+        self.session_timer_label.setStyleSheet(f"color: {WHITE}; font-size: 20px; font-weight: 800; letter-spacing: 0.5px; padding: 12px 0 16px 0;")
+        self.session_timer_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.session_timer_label)
 
-        # ============ HIDDEN ELEMENTS ============
+        self.setLayout(layout)
+
+        # ============ Widgets internos (não visíveis, para compatibilidade) ============
         self.host_edit = QLineEdit("localhost")
         self.port_spin = QSpinBox()
         self.port_spin.setRange(1, 65535)
         self.port_spin.setValue(12345)
-
-        # Status labels ocultos (para compatibilidade)
-        self.status_label = QLabel("")
-        self.recording_label = QLabel("")
-        self.t1_btn = QPushButton("")
-        self.t2_btn = QPushButton("")
-        self.t1_counter_label = QLabel("")
-        self.t2_counter_label = QLabel("")
+        self.status_label = self.status_eeg  # alias
+        self.recording_label = self.gravacao_status  # alias
+        self.t1_counter_label = QLabel("0")
+        self.t2_counter_label = QLabel("0")
         self.baseline_label = QLabel("")
-        self.task_combo = QComboBox()
-        self.task_combo.currentTextChanged.connect(self.on_task_changed)
-        self.patient_combo = QComboBox()
-        self.refresh_patients_btn = QPushButton("")
+        self.baseline_timer = QTimer()
+        self.baseline_timer.timeout.connect(self.update_baseline_timer)
+        self.baseline_time_remaining = 0
 
-        # Game labels
+        # task_combo interno (não visível) para compatibilidade com on_task_changed
+        self.task_combo = QComboBox()
+        self.task_combo.addItems(["Baseline", "Treino", "Teste", "Jogo"])
+        self.task_combo.currentTextChanged.connect(self.on_task_changed)
+
+        # Game mode labels (ocultos, para compatibilidade)
         self.accuracy_details_label = QLabel("")
         self.accuracy_group = QWidget()
         self.status_table_group = QWidget()
-        self.total_predictions_label = QLabel("")
-        self.left_predictions_label = QLabel("")
-        self.right_predictions_label = QLabel("")
-        self.transitions_label = QLabel("")
-        self.confidence_label = QLabel("")
+        self.total_predictions_label = QLabel("0")
+        self.left_predictions_label = QLabel("0")
+        self.right_predictions_label = QLabel("0")
+        self.transitions_label = QLabel("0")
+        self.confidence_label = QLabel("0%")
         self.stats_group = QWidget()
         self.game_group = QWidget()
         self.prediction_label = QLabel("")
         self.prob_left_label = QLabel("")
         self.prob_right_label = QLabel("")
         self.model_status_label = QLabel("")
-        self.accuracy_label = QLabel("")
+        self.accuracy_label = QLabel("Acurácia: 0% (0/0)")
         self.ai_status_label = QLabel("")
 
-        # Timer
+        # Inicializar UDP auto-send checkboxes (para compatibilidade)
+        self.udp_auto_send_checkbox = QCheckBox()
+        self.udp_auto_send_checkbox.setChecked(True)
+        self.esp32_auto_send_checkbox = QCheckBox()
+        self.esp32_auto_send_checkbox.setChecked(True)
+        self.udp_toggle_btn = QPushButton("")
+        self.udp_status_label = QLabel("")
+        self.udp_test_left_btn = QPushButton("")
+        self.udp_test_right_btn = QPushButton("")
+        self.esp32_toggle_btn = QPushButton("")
+        self.esp32_status_label = QLabel("")
+        self.esp32_test_left_btn = QPushButton("")
+        self.esp32_test_right_btn = QPushButton("")
+
         self.stats_timer = QTimer()
         self.stats_timer.timeout.connect(self.update_game_stats)
         self.stats_timer.start(1000)
 
-        self.setLayout(layout)
         self.refresh_patients()
+
+    def _set_task(self, task):
+        """Muda a tarefa ativa via botão"""
+        idx = self.task_combo.findText(task)
+        if idx >= 0:
+            self.task_combo.setCurrentIndex(idx)
+
+    def _on_patient_changed(self, text):
+        """Atualiza o label de paciente quando muda no combo"""
+        if text and text != "Selecionar paciente...":
+            self.patient_display_label.setText(f"Paciente: {text}")
+        else:
+            self.patient_display_label.setText("Paciente: ####")
+
+    def _update_marcador_text(self):
+        """Atualiza o texto dos marcadores na barra"""
+        self.marcador_text.setText(f"Marcadores -  T1: {self.t1_counter}  |  T2: {self.t2_counter}")
         
     def refresh_patients(self):
         """Atualiza a lista de pacientes"""
@@ -420,55 +512,76 @@ class StreamingWidget(QWidget):
             QMessageBox.critical(self, "Erro", f"Erro ao carregar pacientes: {e}")
     
     def toggle_connection(self):
-        """Conecta/desconecta do streaming"""
+        """Conecta/desconecta tudo de uma vez (EEG + UDP + ESP32)"""
+        GREEN = "#48bb78"
+        ORANGE = "#f6ad55"
+        GRAY = "#a0aec0"
+        RED = "#fc8181"
+
         if self.streaming_thread is None or not self.streaming_thread.isRunning():
-            # Conectar
+            # === CONECTAR TUDO ===
             host = self.host_edit.text()
             port = self.port_spin.value()
-            
+
+            # 1. EEG Streaming
+            self.status_eeg.setText("EEG - Conectando...")
+            self.status_eeg.setStyleSheet(f"color: {ORANGE}; font-size: 14px; font-weight: 700;")
             self.streaming_thread = StreamingThread()
             self.streaming_thread.data_received.connect(self.on_data_received)
             self.streaming_thread.connection_status.connect(self.on_connection_status)
             self.streaming_thread.start_streaming(host, port)
-            
+
             self.connect_btn.setText("Desconectar")
             self.connect_btn.setEnabled(False)
 
-            # Iniciar servidor UDP
+            # 2. UDP Unity
+            self.status_vr.setText("VR - Conectando...")
+            self.status_vr.setStyleSheet(f"color: {ORANGE}; font-size: 14px; font-weight: 700;")
             try:
                 if self.unity_communicator.start_server():
                     self.udp_server_active = True
-                    self.udp_status_label.setText("Servidor UDP: Ligado")
-                    self.udp_status_label.setStyleSheet("color: green; font-weight: bold;")
-                    self.udp_toggle_btn.setText("Parar Servidor UDP")
-                    self.udp_toggle_btn.setStyleSheet("background-color: #f44336; color: white; font-weight: bold;")
-                    
-                    # Habilitar botões de teste
-                    self.udp_test_left_btn.setEnabled(True)
-                    self.udp_test_right_btn.setEnabled(True)
-                    
-                    QMessageBox.information(self, "Sucesso", "Servidor UDP iniciado com sucesso!\nBroadcast do IP enviado automaticamente.")
+                    self.status_vr.setText("VR - Conectado")
+                    self.status_vr.setStyleSheet(f"color: {GREEN}; font-size: 14px; font-weight: 700;")
                 else:
-                    QMessageBox.critical(self, "Erro", "Falha ao iniciar servidor UDP")
-            except Exception as e:
-                QMessageBox.critical(self, "Erro", f"Erro ao iniciar servidor UDP: {e}")
+                    self.status_vr.setText("VR - Falha")
+                    self.status_vr.setStyleSheet(f"color: {RED}; font-size: 14px; font-weight: 700;")
+            except Exception:
+                self.status_vr.setText("VR - Falha")
+                self.status_vr.setStyleSheet(f"color: {RED}; font-size: 14px; font-weight: 700;")
+
+            # 3. ESP32
+            self.status_ortese.setText("ORTESE - Conectando...")
+            self.status_ortese.setStyleSheet(f"color: {ORANGE}; font-size: 14px; font-weight: 700;")
+            try:
+                if self.esp32_communicator.connect():
+                    self.esp32_connected = True
+                    self.status_ortese.setText("ORTESE - Conectado")
+                    self.status_ortese.setStyleSheet(f"color: {GREEN}; font-size: 14px; font-weight: 700;")
+                else:
+                    self.esp32_connected = False
+                    self.status_ortese.setText("ORTESE - OFF")
+                    self.status_ortese.setStyleSheet(f"color: {GRAY}; font-size: 14px; font-weight: 700;")
+            except Exception:
+                self.esp32_connected = False
+                self.status_ortese.setText("ORTESE - Falha")
+                self.status_ortese.setStyleSheet(f"color: {RED}; font-size: 14px; font-weight: 700;")
+
         else:
-            # Parar servidor UDP
+            # === DESCONECTAR TUDO ===
             try:
                 self.unity_communicator.stop_server()
                 self.udp_server_active = False
-                self.udp_status_label.setText("Servidor UDP: Desligado")
-                self.udp_status_label.setStyleSheet("color: red; font-weight: bold;")
-                self.udp_toggle_btn.setText("Iniciar Servidor UDP")
-                self.udp_toggle_btn.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold;")
-                
-                # Desabilitar botões de teste
-                self.udp_test_left_btn.setEnabled(False)
-                self.udp_test_right_btn.setEnabled(False)
-                
-                QMessageBox.information(self, "Sucesso", "Servidor UDP parado com sucesso!")
-            except Exception as e:
-                QMessageBox.critical(self, "Erro", f"Erro ao parar servidor UDP: {e}")
+            except Exception:
+                pass
+            self.status_eeg.setText("EEG - Standby")
+            self.status_eeg.setStyleSheet(f"color: #ffffff; font-size: 14px; font-weight: 700;")
+            self.status_vr.setText("VR - Standby")
+            self.status_vr.setStyleSheet(f"color: #ffffff; font-size: 14px; font-weight: 700;")
+            self.status_ortese.setText("ORTESE - OFF")
+            self.status_ortese.setStyleSheet(f"color: {GRAY}; font-size: 14px; font-weight: 700;")
+            self.streaming_thread.stop_streaming()
+            self.connect_btn.setText("Conectar")
+            self.record_btn.setEnabled(False)
     
     def manual_esp32_test(self, direction):
         """Teste manual do envio serial para ESP32"""
@@ -901,30 +1014,25 @@ class StreamingWidget(QWidget):
             if marker_type == "T1":
                 self.t1_counter += 1
                 self.t1_counter_label.setText(f"T1: {self.t1_counter}")
-                
-                # Enviar trigger apenas nos modos Teste e Treino
+
                 current_task = self.task_combo.currentText()
                 if current_task in ["Teste", "Treino", "Jogo"]:
-                    # Enviar UDP se ativo
                     if self.udp_server_active:
-                        UDP_sender.enviar_sinal('trigger_left')  # Enviar sinal para ativar trigger esquerdo
-                    
-                    # Enviar Serial se habilitado
+                        UDP_sender.enviar_sinal('trigger_left')
                     self.send_esp32_signal('esquerda')
-                    
+
             elif marker_type == "T2":
                 self.t2_counter += 1
                 self.t2_counter_label.setText(f"T2: {self.t2_counter}")
-                
-                # Enviar trigger apenas nos modos Teste e Treino
+
                 current_task = self.task_combo.currentText()
                 if current_task in ["Teste", "Treino", "Jogo"]:
-                    # Enviar UDP se ativo
                     if self.udp_server_active:
-                        UDP_sender.enviar_sinal('trigger_right')  # Enviar sinal para ativar trigger direito
-                    
-                    # Enviar Serial se habilitado
+                        UDP_sender.enviar_sinal('trigger_right')
                     self.send_esp32_signal('direita')
+
+            # Atualizar barra de marcadores
+            self._update_marcador_text()
 
             if USE_OPENBCI_LOGGER:
                 # Para o logger OpenBCI, verificar se baseline está ativo
@@ -1425,6 +1533,7 @@ class StreamingWidget(QWidget):
         self.t2_counter = 0
         self.t1_counter_label.setText("T1: 0")
         self.t2_counter_label.setText("T2: 0")
+        self._update_marcador_text()
         print("🔄 Contadores de ações resetados")
         
     def start_accuracy_udp_receiver(self):
@@ -1611,20 +1720,24 @@ class StreamingWidget(QWidget):
                 self.csv_logger.log_data(data)
     
     def on_connection_status(self, connected):
-        """Callback para status da conexão"""
+        """Callback para status da conexão - cores do HTML"""
+        GREEN = "#48bb78"
+        ORANGE = "#f6ad55"
+        WHITE = "#ffffff"
+        RED = "#fc8181"
         if connected:
             if hasattr(self.streaming_thread, 'is_mock_mode') and self.streaming_thread.is_mock_mode:
-                self.status_label.setText("Simulação (Dados Fake)")
-                self.status_label.setStyleSheet("color: orange; font-weight: bold;")
+                self.status_eeg.setText("EEG - Simulação")
+                self.status_eeg.setStyleSheet(f"color: {ORANGE}; font-size: 14px; font-weight: 700;")
             else:
-                self.status_label.setText("Conectado")
-                self.status_label.setStyleSheet("color: green; font-weight: bold;")
+                self.status_eeg.setText("EEG - Conectado")
+                self.status_eeg.setStyleSheet(f"color: {GREEN}; font-size: 14px; font-weight: 700;")
             self.record_btn.setEnabled(True)
         else:
-            self.status_label.setText("Desconectado")
-            self.status_label.setStyleSheet("color: red; font-weight: bold;")
+            self.status_eeg.setText("EEG - Falha")
+            self.status_eeg.setStyleSheet(f"color: {RED}; font-size: 14px; font-weight: 700;")
             self.record_btn.setEnabled(False)
-        
+
         self.connect_btn.setEnabled(True)
         if connected:
             self.connect_btn.setText("Desconectar")
