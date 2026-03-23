@@ -1,7 +1,6 @@
 import numpy as np
 from collections import deque
-from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, 
-                           QComboBox, QLabel)
+from PyQt5.QtWidgets import QWidget, QVBoxLayout
 from PyQt5.QtCore import QTimer
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
@@ -26,42 +25,17 @@ class EEGPlotWidget(QWidget):
         self.timer.start(50)  # 20 FPS
         
     def setup_ui(self):
-        """Configura a interface do widget - Layout responsivo"""
+        """Configura a interface do widget - Escala automática, todos os canais"""
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
-        
-        # Controles compactos com proporções responsivas
-        controls_layout = QHBoxLayout()
-        controls_layout.setSpacing(8)
-        
-        self.channel_combo = QComboBox()
-        self.channel_combo.addItems([f"Canal {i}" for i in range(16)])
-        self.channel_combo.addItem("Todos")
-        self.channel_combo.currentTextChanged.connect(self.change_channel)
-        
-        self.scale_combo = QComboBox()
-        self.scale_combo.addItems(["Auto", "±50µV", "±100µV", "±200µV", "±500µV"])
-        self.scale_combo.currentTextChanged.connect(self.change_scale)
-        
-        ch_label = QLabel("Canal:")
-        sc_label = QLabel("Escala:")
-        
-        # Proporções responsivas
-        controls_layout.addWidget(ch_label)
-        controls_layout.addWidget(self.channel_combo, 2)
-        controls_layout.addWidget(sc_label)
-        controls_layout.addWidget(self.scale_combo, 2)
-        controls_layout.addStretch(5)  # Espaço à direita
-        
-        layout.addLayout(controls_layout)
-        
-        # Área do plot - aumentar para preencher espaço
+
+        # Área do plot - preenche todo o espaço
         self.figure = Figure(figsize=(12, 6), dpi=100)
         self.figure.set_tight_layout(True)
         self.canvas = FigureCanvas(self.figure)
-        layout.addWidget(self.canvas, 1)  # Stretch para preencher
-        
+        layout.addWidget(self.canvas, 1)
+
         self.setLayout(layout)
         
     def setup_plot(self):
@@ -94,72 +68,32 @@ class EEGPlotWidget(QWidget):
             self.current_time += 1/125  # 125 Hz
             
     def update_plot(self):
-        """Atualiza o plot com novos dados"""
+        """Atualiza o plot com novos dados - Todos os canais com escala automática"""
         if len(self.data_buffer) == 0:
             return
-            
-        # Converter buffer para arrays numpy
+
         times = np.array(self.time_buffer)
         data = np.array(self.data_buffer)
-        
+
         if len(times) < 2:
             return
-            
-        # Atualizar janela de tempo
+
+        # Janela de 8 segundos
         current_time = times[-1]
         window_start = max(0, current_time - 8)
-        
-        # Filtrar dados da janela
         mask = times >= window_start
         windowed_times = times[mask] - window_start
         windowed_data = data[mask]
-        
-        # Atualizar cada linha
-        selected_channel = self.channel_combo.currentText()
-        
-        if selected_channel == "Todos":
-            # Mostrar todos os canais com offset
+
+        # Mostrar todos os canais com offset vertical
+        if len(windowed_data) > 0:
             for i in range(16):
-                if len(windowed_data) > 0:
-                    y_data = windowed_data[:, i] + i * 100  # Offset vertical
-                    self.lines[i].set_data(windowed_times, y_data)
-                    self.lines[i].set_visible(True)
-            
+                y_data = windowed_data[:, i] + i * 100
+                self.lines[i].set_data(windowed_times, y_data)
+                self.lines[i].set_visible(True)
+
             self.ax.set_ylim(-100, 1600)
             self.ax.legend(bbox_to_anchor=(1.02, 1), loc='upper left', fontsize=7)
-        else:
-            # Mostrar apenas um canal
-            channel_idx = int(selected_channel.replace('Canal ', ''))
-            
-            for i in range(16):
-                if i == channel_idx and len(windowed_data) > 0:
-                    self.lines[i].set_data(windowed_times, windowed_data[:, i])
-                    self.lines[i].set_visible(True)
-                else:
-                    self.lines[i].set_visible(False)
-            
-            # Ajustar escala
-            scale_text = self.scale_combo.currentText()
-            if scale_text == "Auto":
-                if len(windowed_data) > 0:
-                    y_data = windowed_data[:, channel_idx]
-                    if len(y_data) > 0:
-                        y_min, y_max = np.min(y_data), np.max(y_data)
-                        margin = (y_max - y_min) * 0.1
-                        self.ax.set_ylim(y_min - margin, y_max + margin)
-            else:
-                scale_val = int(scale_text.replace("±", "").replace("µV", ""))
-                self.ax.set_ylim(-scale_val, scale_val)
-            
-            self.ax.legend().set_visible(False)
-        
+
         self.ax.set_xlim(0, 8)
         self.canvas.draw()
-        
-    def change_channel(self):
-        """Callback para mudança de canal"""
-        self.setup_plot()
-        
-    def change_scale(self):
-        """Callback para mudança de escala"""
-        pass
