@@ -97,17 +97,10 @@ class StreamingWidget(QWidget):
         self.unity_communicator.set_message_callback(self._on_unity_message)
         self.unity_communicator.set_connection_callback(self._on_unity_connection)
 
-        # Inicializar comunicador ESP32
+        # Inicializar comunicador ESP32 (sem conectar — só no clique do botão)
         self.esp32_communicator = get_esp32_communicator()
         self.esp32_communicator.set_connection_callback(self._on_esp32_connection)
-        
-        # Conectar ao ESP32 na inicialização
-        if self.esp32_communicator.connect():
-            self.esp32_connected = True
-            print("[GUI] ✓ ESP32 conectado com sucesso", flush=True)
-        else:
-            self.esp32_connected = False
-            print("[GUI] ✗ Falha ao conectar ESP32", flush=True)
+        self.esp32_connected = False
 
     # Contadores para marcadores
         self.t1_counter = 0
@@ -157,36 +150,38 @@ class StreamingWidget(QWidget):
         LIGHT_GRAY = "#e2e8f0"
         WHITE = "#ffffff"
         TEXT_DARK = "#1a202c"
-        BTN_STYLE = f"padding: 7px 18px; font-size: 13px; font-weight: 600; background: {LIGHT_GRAY}; color: {TEXT_DARK}; border: 1px solid #4a5568; border-radius: 5px;"
-        BTN_GREEN_STYLE = f"padding: 7px 18px; font-size: 13px; font-weight: 600; background: #38a169; color: {WHITE}; border: 1px solid #2f855a; border-radius: 5px;"
+
 
         layout = QVBoxLayout()
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(0)
 
-        # ============ TOP ROW: 3 colunas iguais ============
+        # ============ TOP ROW: streaming-top — grid 1fr 1fr 1fr, padding: 16px 20px 12px 20px ============
+        # Equivalente a: .streaming-top { display: grid; grid-template-columns: 1fr 1fr 1fr; padding: 16px 20px 12px 20px; }
         top_container = QWidget()
         top_container.setStyleSheet(f"background-color: {PANEL_BG};")
         top_layout = QHBoxLayout()
         top_layout.setContentsMargins(20, 16, 20, 12)
         top_layout.setSpacing(0)
 
-        # --- COL LEFT: Paciente + Baseline/Jogo + Calibração ---
+        # ---- COL LEFT: .col-left { flex-direction: column; gap: 10px } ----
         col_left = QVBoxLayout()
         col_left.setSpacing(10)
 
+        # .patient-label { font-size: 22px; font-weight: 800; letter-spacing: 0.5px }
         self.patient_display_label = QLabel("Paciente: ####")
         self.patient_display_label.setStyleSheet(f"color: {WHITE}; font-size: 22px; font-weight: 800; letter-spacing: 0.5px;")
         col_left.addWidget(self.patient_display_label)
 
-        # Baseline/Jogo stacked + Calibração box lado a lado
+        # div: display flex, align-items stretch, gap 14px, margin-top 6px
         left_mid = QHBoxLayout()
         left_mid.setSpacing(14)
         left_mid.setContentsMargins(0, 6, 0, 0)
 
-        # Baseline/Jogo empilhados
+        # Baseline + Jogo: flex-direction column, gap 10px, justify-content center
         task_col = QVBoxLayout()
         task_col.setSpacing(10)
+        # button.btn: padding 8px 20px, font-size 14px, font-weight 700, width 100%
         self.btn_baseline = QPushButton("Baseline")
         self.btn_baseline.setStyleSheet(f"padding: 8px 20px; font-size: 14px; font-weight: 700; background: {LIGHT_GRAY}; color: {TEXT_DARK}; border: 1px solid #4a5568; border-radius: 5px;")
         self.btn_baseline.clicked.connect(lambda: self._set_task("Baseline"))
@@ -197,20 +192,25 @@ class StreamingWidget(QWidget):
         task_col.addWidget(self.btn_jogo)
         left_mid.addLayout(task_col)
 
-        # Calibração box
+        # .calibration-box { border: 2px solid #4a5568; border-radius: 6px; padding: 8px 14px;
+        #   flex-direction column; align-items center; gap 6px; background rgba(45,55,72,0.4) }
         calib_frame = QWidget()
         calib_frame.setStyleSheet(f"border: 2px solid #4a5568; border-radius: 6px; background: rgba(45, 55, 72, 102);")
         calib_inner = QVBoxLayout()
         calib_inner.setContentsMargins(14, 8, 14, 8)
         calib_inner.setSpacing(6)
+        # button.btn: font-size 13px, font-weight 600
         self.btn_iniciar_treino = QPushButton("Iniciar Treino")
         self.btn_iniciar_treino.setStyleSheet(f"font-size: 13px; font-weight: 600; background: {LIGHT_GRAY}; color: {TEXT_DARK}; border: 1px solid #4a5568; border-radius: 5px; padding: 6px 14px;")
         self.btn_iniciar_treino.clicked.connect(lambda: self._set_task("Treino"))
+        # .calibration-title { font-size: 16px; font-weight: 700 }
         calib_title = QLabel("Calibração")
         calib_title.setStyleSheet(f"font-size: 16px; font-weight: 700; color: {WHITE}; border: none;")
         calib_title.setAlignment(Qt.AlignCenter)
+        # .calibration-btns { display flex; gap 8px }
         calib_btns_row = QHBoxLayout()
         calib_btns_row.setSpacing(8)
+        # button.btn: font-size 12px
         self.btn_calib_esq = QPushButton("Esquerda")
         self.btn_calib_esq.setStyleSheet(f"font-size: 12px; font-weight: 600; background: {LIGHT_GRAY}; color: {TEXT_DARK}; border: 1px solid #4a5568; border-radius: 5px; padding: 6px 14px;")
         self.btn_calib_esq.clicked.connect(lambda: self.add_marker("T1"))
@@ -224,25 +224,30 @@ class StreamingWidget(QWidget):
         calib_inner.addLayout(calib_btns_row)
         calib_frame.setLayout(calib_inner)
         left_mid.addWidget(calib_frame)
+        left_mid.addStretch()
 
         col_left.addLayout(left_mid)
         col_left.addStretch()
         top_layout.addLayout(col_left, 1)
 
-        # --- COL CENTER: Status + Conectar + EEG/VR/ORTESE ---
+        # ---- COL CENTER: .col-center { flex-direction column; gap 6px; padding-left 10px } ----
         col_center = QVBoxLayout()
         col_center.setSpacing(6)
         col_center.setContentsMargins(10, 0, 0, 0)
 
+        # .status-title { font-size: 22px; font-weight: 800 }
         status_title = QLabel("Status")
         status_title.setStyleSheet(f"color: {WHITE}; font-size: 22px; font-weight: 800;")
         col_center.addWidget(status_title)
 
+        # button.btn.btn-green: width fit-content, padding 6px 20px, font-size 13px
         self.connect_btn = QPushButton("Conectar")
-        self.connect_btn.setStyleSheet(BTN_GREEN_STYLE)
+        self.connect_btn.setStyleSheet(f"padding: 6px 15px; font-size: 13px; font-weight: 600; background: #38a169; color: {WHITE}; border: 1px solid #2f855a; border-radius: 5px;")
         self.connect_btn.clicked.connect(self.toggle_connection)
-        col_center.addWidget(self.connect_btn)
+        col_center.addWidget(self.connect_btn, 0, Qt.AlignLeft)
 
+        # .status-list { flex-direction column; gap 3px; margin-top 4px }
+        # .status-item { font-size: 14px; font-weight: 700 }
         status_list = QVBoxLayout()
         status_list.setSpacing(3)
         status_list.setContentsMargins(0, 4, 0, 0)
@@ -250,8 +255,8 @@ class StreamingWidget(QWidget):
         self.status_eeg.setStyleSheet(f"color: {WHITE}; font-size: 14px; font-weight: 700;")
         self.status_vr = QLabel("VR - Standby")
         self.status_vr.setStyleSheet(f"color: {WHITE}; font-size: 14px; font-weight: 700;")
-        self.status_ortese = QLabel("ORTESE - OFF")
-        self.status_ortese.setStyleSheet(f"color: {GRAY}; font-size: 14px; font-weight: 700;")
+        self.status_ortese = QLabel("ORTESE - Standby")
+        self.status_ortese.setStyleSheet(f"color: {WHITE}; font-size: 14px; font-weight: 700;")
         status_list.addWidget(self.status_eeg)
         status_list.addWidget(self.status_vr)
         status_list.addWidget(self.status_ortese)
@@ -259,43 +264,55 @@ class StreamingWidget(QWidget):
         col_center.addStretch()
         top_layout.addLayout(col_center, 1)
 
-        # --- COL RIGHT: Gravação + IA Table ---
+        # ---- COL RIGHT: .col-right { flex-direction column; gap 8px } ----
+        # Internamente: .right-panel-top { display flex; align-items flex-start; justify-content space-between }
         col_right = QVBoxLayout()
         col_right.setSpacing(8)
 
-        # Top right: Gravação à esquerda, Tabela IA à direita
         right_top = QHBoxLayout()
         right_top.setSpacing(16)
 
-        # Gravação controls
+        # .right-panel-content { flex-direction column; gap 6px }
         grav_col = QVBoxLayout()
         grav_col.setSpacing(6)
+
+        # .gravacao-title { font-size: 18px; font-weight: 800 }
         gravacao_title = QLabel("Gravação")
         gravacao_title.setStyleSheet(f"color: {WHITE}; font-size: 18px; font-weight: 800;")
         grav_col.addWidget(gravacao_title)
 
+        # .gravacao-row { display flex; align-items center; gap 8px }
         pac_row = QHBoxLayout()
         pac_row.setSpacing(8)
+        # .gravacao-label { font-size: 14px; font-weight: 700 }
         pac_label = QLabel("Paciente")
         pac_label.setStyleSheet(f"color: {WHITE}; font-size: 14px; font-weight: 700;")
+        # .input-paciente { padding 4px 8px; font-size 13px; border 1px solid #4a5568;
+        #   border-radius 4px; background #e2e8f0; color #1a202c; width 70px; font-weight 600 }
         self.patient_combo = QComboBox()
-        self.patient_combo.setStyleSheet(f"padding: 4px 8px; font-size: 13px; background: {LIGHT_GRAY}; color: {TEXT_DARK}; border: 1px solid #4a5568; border-radius: 4px; font-weight: 600; max-width: 100px;")
+        self.patient_combo.setStyleSheet(f"padding: 4px 8px; font-size: 13px; background: {LIGHT_GRAY}; color: {TEXT_DARK}; border: 1px solid #4a5568; border-radius: 4px; font-weight: 600;")
+        self.patient_combo.setMaximumWidth(100)
         self.patient_combo.currentTextChanged.connect(self._on_patient_changed)
         pac_row.addWidget(pac_label)
         pac_row.addWidget(self.patient_combo)
         grav_col.addLayout(pac_row)
 
+        # button.btn.btn-atualizar: padding 5px 14px, font-size 12px
         self.refresh_patients_btn = QPushButton("Atualizar")
         self.refresh_patients_btn.setStyleSheet(f"padding: 5px 14px; font-size: 12px; font-weight: 600; background: {LIGHT_GRAY}; color: {TEXT_DARK}; border: 1px solid #4a5568; border-radius: 5px;")
         self.refresh_patients_btn.clicked.connect(self.refresh_patients)
         grav_col.addWidget(self.refresh_patients_btn)
 
+        # .gravacao-actions { display flex; align-items center; gap 10px; margin-top 2px }
         grav_actions = QHBoxLayout()
         grav_actions.setSpacing(10)
+        grav_actions.setContentsMargins(0, 2, 0, 0)
+        # button.btn.btn-green: font-size 12px, padding 5px 14px
         self.record_btn = QPushButton("Iniciar Gravação")
         self.record_btn.setStyleSheet(f"padding: 5px 14px; font-size: 12px; font-weight: 600; background: #38a169; color: {WHITE}; border: 1px solid #2f855a; border-radius: 5px;")
         self.record_btn.clicked.connect(self.toggle_recording)
         self.record_btn.setEnabled(False)
+        # .status-gravacao { font-size: 12px; font-weight: 600; color: #a0aec0 }
         self.gravacao_status = QLabel("Não Gravando")
         self.gravacao_status.setStyleSheet(f"color: {GRAY}; font-size: 12px; font-weight: 600;")
         grav_actions.addWidget(self.record_btn)
@@ -303,42 +320,55 @@ class StreamingWidget(QWidget):
         grav_col.addLayout(grav_actions)
         right_top.addLayout(grav_col)
 
-        # IA Table (hands + dots)
+        # Hands + IA Table — .right-side-panel { flex-direction column; align-items flex-end; gap 6px }
         ia_col = QVBoxLayout()
         ia_col.setSpacing(4)
         ia_col.setContentsMargins(0, 0, 0, 0)
 
-        # Hands
+        # .hand-icons { display flex; gap 16px (style override: gap 24px); justify-content center }
+        # .hand-icon { font-size: 32px; filter drop-shadow }
         hands_row = QHBoxLayout()
         hands_row.setSpacing(24)
         hands_row.addStretch()
         hand_left = QLabel("✋")
+        # .hand-icon.left { color: #f6ad55 }
         hand_left.setStyleSheet(f"font-size: 32px; color: {ORANGE};")
         hand_right = QLabel("🤚")
+        # .hand-icon.right { color: #63b3ed }
         hand_right.setStyleSheet(f"font-size: 32px; color: #63b3ed;")
         hands_row.addWidget(hand_left)
         hands_row.addWidget(hand_right)
         hands_row.addStretch()
         ia_col.addLayout(hands_row)
 
-        # IA/Paciente/Tarefa/Acertos table
+        # .ia-table-area: grid com .ia-row grid-template-columns 80px 40px 40px
+        # .ia-cell { padding 4px 6px; font-size 13px; font-weight 700 }
+        # .ia-cell-label { justify-content flex-end; padding-right 10px }
+        # .dot { width 14px; height 14px; border-radius 50%; background #2d3748 }
+        # .acertos-label { color: #f6ad55; font-weight: 800 }
+        # .acerto-val { font-size: 18px; font-weight: 800 }
         ia_table = QGridLayout()
         ia_table.setSpacing(0)
         ia_table.setContentsMargins(0, 4, 0, 0)
+        ia_table.setColumnMinimumWidth(0, 80)
+        ia_table.setColumnMinimumWidth(1, 40)
+        ia_table.setColumnMinimumWidth(2, 40)
 
-        dot_style = f"color: #2d3748; font-size: 14px;"
-        label_style = f"color: {WHITE}; font-size: 13px; font-weight: 700;"
-        acertos_style = f"color: {ORANGE}; font-size: 13px; font-weight: 800;"
-        val_style = f"color: {WHITE}; font-size: 18px; font-weight: 800;"
+        DOT_INACTIVE = "●"
+        dot_style      = f"color: #2d3748; font-size: 14px;"
+        label_style    = f"color: {WHITE}; font-size: 13px; font-weight: 700; padding: 4px 10px 4px 6px;"
+        acertos_style  = f"color: {ORANGE}; font-size: 13px; font-weight: 800; padding: 4px 10px 4px 6px;"
+        cell_style     = f"font-size: 13px; font-weight: 700; border: 1px solid rgba(74, 85, 104, 0.3); padding: 4px 6px;"
+        val_style      = f"color: {WHITE}; font-size: 18px; font-weight: 800; border: 1px solid rgba(74, 85, 104, 0.3); padding: 4px 6px;"
 
-        rows = [
-            ("IA", label_style, "●", dot_style, "●", dot_style),
-            ("Paciente", label_style, "●", dot_style, "●", dot_style),
-            ("Tarefa", label_style, "●", dot_style, "●", dot_style),
-            ("Acertos", acertos_style, "0", val_style, "0", val_style),
+        table_rows = [
+            ("IA",       label_style,   DOT_INACTIVE, dot_style + cell_style, DOT_INACTIVE, dot_style + cell_style),
+            ("Paciente", label_style,   DOT_INACTIVE, dot_style + cell_style, DOT_INACTIVE, dot_style + cell_style),
+            ("Tarefa",   label_style,   DOT_INACTIVE, dot_style + cell_style, DOT_INACTIVE, dot_style + cell_style),
+            ("Acertos",  acertos_style, "0",          val_style,              "0",          val_style),
         ]
         self.ia_table_cells = {}
-        for r, (name, ls, v1, v1s, v2, v2s) in enumerate(rows):
+        for r, (name, ls, v1, v1s, v2, v2s) in enumerate(table_rows):
             lbl = QLabel(name)
             lbl.setStyleSheet(ls)
             lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -354,6 +384,7 @@ class StreamingWidget(QWidget):
             self.ia_table_cells[name] = (lbl, c1, c2)
 
         ia_col.addLayout(ia_table)
+        ia_col.addStretch()
         right_top.addLayout(ia_col)
 
         col_right.addLayout(right_top)
@@ -399,20 +430,9 @@ class StreamingWidget(QWidget):
         layout.addWidget(self.bci_status_label)
 
         # ============ EEG CHART ============
-        eeg_container = QWidget()
-        eeg_container.setStyleSheet(f"background: {WHITE}; border-radius: 4px; margin: 0 20px 12px 20px;")
-        eeg_layout = QVBoxLayout()
-        eeg_layout.setContentsMargins(10, 10, 10, 10)
-        eeg_layout.setSpacing(4)
-        chart_title = QLabel("Dados EEG em Tempo Real")
-        chart_title.setStyleSheet(f"color: {TEXT_DARK}; font-size: 13px; font-weight: 600;")
-        chart_title.setAlignment(Qt.AlignCenter)
-        eeg_layout.addWidget(chart_title)
         self.plot_widget = EEGPlotWidget()
         self.plot_widget.setMinimumHeight(300)
-        eeg_layout.addWidget(self.plot_widget)
-        eeg_container.setLayout(eeg_layout)
-        layout.addWidget(eeg_container)
+        layout.addWidget(self.plot_widget)
 
         # ============ SESSION TIMER ============
         self.session_timer_label = QLabel("Sessão: 00:00:00")
@@ -515,7 +535,6 @@ class StreamingWidget(QWidget):
         """Conecta/desconecta tudo de uma vez (EEG + UDP + ESP32)"""
         GREEN = "#48bb78"
         ORANGE = "#f6ad55"
-        GRAY = "#a0aec0"
         RED = "#fc8181"
 
         if self.streaming_thread is None or not self.streaming_thread.isRunning():
@@ -559,8 +578,8 @@ class StreamingWidget(QWidget):
                     self.status_ortese.setStyleSheet(f"color: {GREEN}; font-size: 14px; font-weight: 700;")
                 else:
                     self.esp32_connected = False
-                    self.status_ortese.setText("ORTESE - OFF")
-                    self.status_ortese.setStyleSheet(f"color: {GRAY}; font-size: 14px; font-weight: 700;")
+                    self.status_ortese.setText("ORTESE - Standby")
+                    self.status_ortese.setStyleSheet(f"color: #ffffff; font-size: 14px; font-weight: 700;")
             except Exception:
                 self.esp32_connected = False
                 self.status_ortese.setText("ORTESE - Falha")
@@ -577,8 +596,8 @@ class StreamingWidget(QWidget):
             self.status_eeg.setStyleSheet(f"color: #ffffff; font-size: 14px; font-weight: 700;")
             self.status_vr.setText("VR - Standby")
             self.status_vr.setStyleSheet(f"color: #ffffff; font-size: 14px; font-weight: 700;")
-            self.status_ortese.setText("ORTESE - OFF")
-            self.status_ortese.setStyleSheet(f"color: {GRAY}; font-size: 14px; font-weight: 700;")
+            self.status_ortese.setText("ORTESE - Standby")
+            self.status_ortese.setStyleSheet(f"color: #ffffff; font-size: 14px; font-weight: 700;")
             self.streaming_thread.stop_streaming()
             self.connect_btn.setText("Conectar")
             self.record_btn.setEnabled(False)

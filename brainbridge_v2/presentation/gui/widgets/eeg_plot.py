@@ -4,7 +4,7 @@ from PyQt5.QtWidgets import QWidget, QVBoxLayout
 from PyQt5.QtCore import QTimer
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
-import matplotlib.pyplot as plt
+import matplotlib.cm as cm
 
 class EEGPlotWidget(QWidget):
     """Widget para plotar dados EEG em tempo real"""
@@ -51,7 +51,7 @@ class EEGPlotWidget(QWidget):
         
         # Linhas para cada canal
         self.lines = []
-        colors = plt.cm.tab10(np.linspace(0, 1, 16))
+        colors = cm.tab10(np.linspace(0, 1, 16))
         
         for i in range(16):
             line, = self.ax.plot([], [], color=colors[i], linewidth=0.8, 
