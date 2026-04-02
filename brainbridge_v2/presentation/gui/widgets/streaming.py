@@ -1,33 +1,61 @@
 import os
-import sys
 from datetime import datetime
-from typing import Optional, List
+from typing import List
 from collections import deque
 import numpy as np
-from pathlib import Path
-import traceback
 import time
 import importlib
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                            QPushButton, QGroupBox, QComboBox, QGridLayout,
                            QMessageBox, QCheckBox,
                            QLineEdit, QSpinBox, QDialog, QInputDialog)
-from PyQt5.QtCore import QThread, pyqtSignal, QTimer, Qt
-from PyQt5.QtGui import QFont
-from brainbridge_v2.infrastructure.database.manager import DatabaseManager
-from brainbridge_v2.infrastructure.acquisition.streaming_thread import StreamingThread
+from PyQt5.QtCore import pyqtSignal, QTimer, Qt
 from brainbridge_v2.infrastructure.config.settings import get_recording_path
+from brainbridge_v2.interface_adapters.controllers.eeg_stream_controller import (
+    EEGStreamController,
+)
+from brainbridge_v2.interface_adapters.controllers.esp32_controller import (
+    ESP32Controller,
+)
+from brainbridge_v2.interface_adapters.controllers.inference_controller import (
+    InferenceController,
+)
+from brainbridge_v2.interface_adapters.controllers.marker_controller import (
+    MarkerController,
+)
+from brainbridge_v2.interface_adapters.controllers.patient_controller import (
+    PatientController,
+)
+from brainbridge_v2.interface_adapters.controllers.recording_controller import (
+    RecordingController,
+)
+from brainbridge_v2.interface_adapters.controllers.session_controller import (
+    SessionController,
+)
+from brainbridge_v2.interface_adapters.controllers.training_controller import (
+    TrainingController,
+)
+from brainbridge_v2.interface_adapters.controllers.unity_controller import (
+    UnityController,
+)
+from brainbridge_v2.interface_adapters.presenters.streaming_presenter import (
+    AccuracyPresenter,
+    AccuracyTrialViewModel,
+    ConnectionStatusPresenter,
+    GameRuntimePresenter,
+    MarkerStateViewModel,
+    ModelViewModel,
+    PredictionViewModel,
+    SessionViewModel,
+    StartRecordingRequest,
+    StartSessionRequest,
+    StreamingSessionStatePresenter,
+    StreamingSessionStateViewModel,
+    TaskViewStatePresenter,
+)
 from brainbridge_v2.presentation.gui.widgets.eeg_plot import EEGPlotWidget
 from brainbridge_v2.presentation.gui.styles import Theme
 
-# Import TensorFlow adapter from brainbridge_v2
-try:
-    from brainbridge_v2.infrastructure.ml.tensorflow_adapter import TensorFlowMLAdapter
-except Exception as e:
-    TensorFlowMLAdapter = None
-    print(f'Aviso: TensorFlow adapter não encontrado: {e}')
-from brainbridge_v2.infrastructure.communication.unity import UDP_sender, UnityCommunicator
-from brainbridge_v2.infrastructure.communication.esp32 import get_esp32_communicator
 from brainbridge_v2.presentation.gui.dialogs.training_dialog import TrainingDialog
 
 # Importar logger do novo módulo (compatível com OpenBCI)
@@ -43,29 +71,51 @@ class StreamingWidget(QWidget):
     # Signal para processar mensagens de acurácia de forma thread-safe
     accuracy_message_signal = pyqtSignal(str)
     
-    def __init__(self, db_manager: DatabaseManager, parent=None):
+    def __init__(
+        self,
+        eeg_stream_controller: EEGStreamController,
+        inference_controller: InferenceController,
+        training_controller: TrainingController,
+        patient_controller: PatientController,
+        recording_controller: RecordingController,
+        session_controller: SessionController,
+        marker_controller: MarkerController,
+        unity_controller: UnityController,
+        esp32_controller: ESP32Controller,
+        parent=None,
+    ):
         super().__init__(parent)
-        self.db_manager = db_manager
+        self.eeg_stream_controller = eeg_stream_controller
+        self.inference_controller = inference_controller
+        self.training_controller = training_controller
+        self.patient_controller = patient_controller
+        self.recording_controller = recording_controller
+        self.session_controller = session_controller
+        self.marker_controller = marker_controller
+        self.unity_controller = unity_controller
+        self.esp32_controller = esp32_controller
+        self.connect_button_enabled = True
+        self.record_button_enabled = False
+        self.eeg_connection_phase = "standby"
+        self.unity_connection_phase = "standby"
+        self.orthosis_connection_phase = "standby"
+        self.disconnection_in_progress = False
 
     # Streaming / logging state
-        self.streaming_thread = None    
         self.csv_logger = None
         self.is_recording = False
-        self.current_patient_id = None
+        self.current_recording_id = None
         self.pending_marker = None  # Para marcadores pendentes no logger OpenBCI
         self.baseline_timer = QTimer()  # Timer para baseline
 
     # Timer de sessão
         self.session_timer = QTimer()
         self.session_timer.timeout.connect(self.update_session_timer)
-        self.session_start_time = None
         self.session_elapsed_seconds = 0
 
         self.setup_ui()
 
-    # Inicialização do modelo
-        self.model = None
-        # Default values; prefer HardThinking canonical config when available
+    # Configuracao base do modelo
         self.channels = 16
         # Force canonical window_size to 250 (HardThinking canonical)
         self.window_size = 250  # 2s @ 125Hz
@@ -90,21 +140,14 @@ class StreamingWidget(QWidget):
 
     # Estados do servidor UDP
         self.udp_server_active = False
-        self.game_mode = False  # Flag para modo jogo
 
-    # Inicializar comunicador Unity
-        self.unity_communicator = UnityCommunicator()
-        self.unity_communicator.set_message_callback(self._on_unity_message)
-        self.unity_communicator.set_connection_callback(self._on_unity_connection)
-
-        # Inicializar comunicador ESP32 (sem conectar — só no clique do botão)
-        self.esp32_communicator = get_esp32_communicator()
-        self.esp32_communicator.set_connection_callback(self._on_esp32_connection)
+    # Inicializar callbacks de comunicação
+        self.eeg_stream_controller.set_data_callback(self.on_data_received)
+        self.eeg_stream_controller.set_connection_callback(self.on_connection_status)
+        self.unity_controller.set_message_callback(self._on_unity_message)
+        self.unity_controller.set_connection_callback(self._on_unity_connection)
+        self.esp32_controller.set_connection_callback(self._on_esp32_connection)
         self.esp32_connected = False
-
-    # Contadores para marcadores
-        self.t1_counter = 0
-        self.t2_counter = 0
 
     # Timer para ações automáticas no jogo
         self.game_action_timer = QTimer()
@@ -112,7 +155,6 @@ class StreamingWidget(QWidget):
 
     # Controle para aguardar resposta antes do próximo sinal
         self.waiting_for_response = False
-        self.response_received = False
 
     # Controle de janela de tempo para IA (configurável; default reduzido)
         self.ai_prediction_enabled = False
@@ -123,21 +165,70 @@ class StreamingWidget(QWidget):
         self.game_action_interval = 10000  # 10 segundos in ms
 
     # Variáveis para cálculo de acurácia
-        self.accuracy_data = []  # Lista de tuplas (cor_esperada, trigger_real)
-        self.accuracy_correct = 0
-        self.accuracy_total = 0
+        self.accuracy_trials: List[AccuracyTrialViewModel] = []
 
     # UDP receiver para acurácia (recebe mensagens do sistema externo)
         self.accuracy_udp_receiver = None
         self.accuracy_thread = None
 
-    # Inference subprocess (when TF not importable in-process)
-        self.inference_proc = None
-        self.inference_port = 5001
-        self.inference_model_path = None
-
     # Conectar signal para processar mensagens de acurácia
         self.accuracy_message_signal.connect(self.process_accuracy_message)
+        self.streaming_state = StreamingSessionStateViewModel(
+            patient_id=None,
+            task_type=None,
+            recording_id=None,
+            started_at_epoch=None,
+            game_mode=False,
+            recording_active=False,
+            baseline_active=False,
+            baseline_remaining_seconds=0,
+            t1_count=0,
+            t2_count=0,
+            eeg_connected=False,
+            eeg_mock_mode=False,
+            unity_server_active=False,
+            esp32_connected=False,
+            model_loaded=False,
+            model_name=None,
+        )
+        self._refresh_streaming_state()
+
+    def _get_current_session(self):
+        return self.session_controller.get_current_session()
+
+    def _refresh_streaming_state(
+        self,
+        *,
+        session: SessionViewModel | None = None,
+        marker_state: MarkerStateViewModel | None = None,
+        loaded_model: ModelViewModel | None = None,
+    ) -> StreamingSessionStateViewModel:
+        current_session = session if session is not None else self.session_controller.get_current_session()
+        current_marker_state = (
+            marker_state if marker_state is not None else self.marker_controller.get_state()
+        )
+        current_loaded_model = (
+            loaded_model
+            if loaded_model is not None
+            else self.inference_controller.get_loaded_model()
+        )
+        self.streaming_state = StreamingSessionStatePresenter.present(
+            session=current_session,
+            marker_state=current_marker_state,
+            loaded_model=current_loaded_model,
+            recording_active=self.is_recording,
+            eeg_connected=self.eeg_stream_controller.is_running(),
+            eeg_mock_mode=self.eeg_stream_controller.is_mock_mode(),
+            unity_server_active=self.udp_server_active,
+            esp32_connected=self.esp32_connected,
+        )
+        return self.streaming_state
+
+    def _get_session_started_at(self):
+        return self.streaming_state.started_at_epoch
+
+    def _is_game_mode(self) -> bool:
+        return self.streaming_state.game_mode
         
     def setup_ui(self):
         """Configura a interface pixel-perfect conforme bci_system.html"""
@@ -449,12 +540,11 @@ class StreamingWidget(QWidget):
         self.port_spin.setValue(12345)
         self.status_label = self.status_eeg  # alias
         self.recording_label = self.gravacao_status  # alias
-        self.t1_counter_label = QLabel("0")
-        self.t2_counter_label = QLabel("0")
+        self.t1_counter_label = QLabel("T1: 0")
+        self.t2_counter_label = QLabel("T2: 0")
         self.baseline_label = QLabel("")
         self.baseline_timer = QTimer()
         self.baseline_timer.timeout.connect(self.update_baseline_timer)
-        self.baseline_time_remaining = 0
 
         # task_combo interno (não visível) para compatibilidade com on_task_changed
         self.task_combo = QComboBox()
@@ -497,6 +587,11 @@ class StreamingWidget(QWidget):
         self.stats_timer.timeout.connect(self.update_game_stats)
         self.stats_timer.start(1000)
 
+        self._apply_connection_panel()
+        self._apply_task_view_state()
+        self._apply_accuracy_display()
+        self._apply_prediction_display()
+        self._set_ai_status("stopped")
         self.refresh_patients()
 
     def _set_task(self, task):
@@ -514,7 +609,78 @@ class StreamingWidget(QWidget):
 
     def _update_marcador_text(self):
         """Atualiza o texto dos marcadores na barra"""
-        self.marcador_text.setText(f"Marcadores -  T1: {self.t1_counter}  |  T2: {self.t2_counter}")
+        self.marcador_text.setText(
+            f"Marcadores -  T1: {self.streaming_state.t1_count}  |  T2: {self.streaming_state.t2_count}"
+        )
+
+    def _update_marker_labels(self, state: MarkerStateViewModel):
+        self._refresh_streaming_state(marker_state=state)
+        self.t1_counter_label.setText(f"T1: {state.t1_count}")
+        self.t2_counter_label.setText(f"T2: {state.t2_count}")
+        self._update_marcador_text()
+
+    def _apply_status_label(self, label: QLabel, text: str, style_sheet: str):
+        label.setText(text)
+        label.setStyleSheet(style_sheet)
+
+    def _apply_connection_panel(self):
+        panel = ConnectionStatusPresenter.present(
+            eeg_phase=self.eeg_connection_phase,
+            vr_phase=self.unity_connection_phase,
+            orthosis_phase=self.orthosis_connection_phase,
+            connect_button_enabled=self.connect_button_enabled,
+            record_button_enabled=self.record_button_enabled,
+        )
+        self._apply_status_label(self.status_eeg, panel.eeg.text, panel.eeg.style_sheet)
+        self._apply_status_label(self.status_vr, panel.vr.text, panel.vr.style_sheet)
+        self._apply_status_label(
+            self.status_ortese,
+            panel.orthosis.text,
+            panel.orthosis.style_sheet,
+        )
+        self.connect_btn.setText(panel.connect_button_text)
+        self.connect_btn.setEnabled(panel.connect_button_enabled)
+        self.record_btn.setEnabled(panel.record_button_enabled)
+
+    def _apply_task_view_state(self):
+        task_view = TaskViewStatePresenter.present(
+            self.task_combo.currentText(),
+            self.is_recording,
+        )
+        self.record_btn.setText(task_view.record_button_text)
+        self.status_table_group.setVisible(task_view.status_table_visible)
+        self.game_group.setVisible(task_view.game_visible)
+        self.stats_group.setVisible(task_view.stats_visible)
+        self.accuracy_group.setVisible(task_view.accuracy_visible)
+
+    def _apply_accuracy_display(self):
+        accuracy_view = AccuracyPresenter.present(self.accuracy_trials)
+        self.accuracy_label.setText(accuracy_view.summary_text)
+        self.accuracy_label.setStyleSheet(accuracy_view.summary_style_sheet)
+        self.accuracy_details_label.setText(accuracy_view.details_text)
+
+    def _set_ai_status(self, state: str):
+        ai_status = GameRuntimePresenter.present_ai_status(state)
+        self.ai_status_label.setText(ai_status.text)
+        self.ai_status_label.setStyleSheet(ai_status.style_sheet)
+
+    def _apply_prediction_display(
+        self,
+        prediction: PredictionViewModel | None = None,
+    ):
+        prediction_view = GameRuntimePresenter.present_prediction(prediction)
+        self.prediction_label.setText(prediction_view.prediction_text)
+        self.prediction_label.setStyleSheet(prediction_view.prediction_style_sheet)
+        self.prob_left_label.setText(prediction_view.left_probability_text)
+        self.prob_right_label.setText(prediction_view.right_probability_text)
+
+    def _apply_game_stats(self):
+        stats_view = GameRuntimePresenter.present_stats(self.predictions)
+        self.total_predictions_label.setText(stats_view.total_predictions_text)
+        self.left_predictions_label.setText(stats_view.left_predictions_text)
+        self.right_predictions_label.setText(stats_view.right_predictions_text)
+        self.transitions_label.setText(stats_view.transitions_text)
+        self.confidence_label.setText(stats_view.confidence_text)
         
     def refresh_patients(self):
         """Atualiza a lista de pacientes"""
@@ -522,7 +688,7 @@ class StreamingWidget(QWidget):
         self.patient_combo.addItem("Selecionar paciente...")
         
         try:
-            patients = self.db_manager.get_all_patients()
+            patients = self.patient_controller.list_patients()
             for patient in patients:
                 self.patient_combo.addItem(
                     f"{patient['name']} (ID: {patient['id']})",
@@ -533,82 +699,68 @@ class StreamingWidget(QWidget):
     
     def toggle_connection(self):
         """Conecta/desconecta tudo de uma vez (EEG + UDP + ESP32)"""
-        GREEN = "#48bb78"
-        ORANGE = "#f6ad55"
-        RED = "#fc8181"
-
-        if self.streaming_thread is None or not self.streaming_thread.isRunning():
+        if not self.eeg_stream_controller.is_running():
             # === CONECTAR TUDO ===
             host = self.host_edit.text()
             port = self.port_spin.value()
 
-            # 1. EEG Streaming
-            self.status_eeg.setText("EEG - Conectando...")
-            self.status_eeg.setStyleSheet(f"color: {ORANGE}; font-size: 14px; font-weight: 700;")
-            self.streaming_thread = StreamingThread()
-            self.streaming_thread.data_received.connect(self.on_data_received)
-            self.streaming_thread.connection_status.connect(self.on_connection_status)
-            self.streaming_thread.start_streaming(host, port)
-
-            self.connect_btn.setText("Desconectar")
-            self.connect_btn.setEnabled(False)
+            self.eeg_connection_phase = "connecting"
+            self.unity_connection_phase = "connecting"
+            self.orthosis_connection_phase = "connecting"
+            self.connect_button_enabled = False
+            self.record_button_enabled = False
+            self._apply_connection_panel()
+            self.eeg_stream_controller.connect(host, port)
 
             # 2. UDP Unity
-            self.status_vr.setText("VR - Conectando...")
-            self.status_vr.setStyleSheet(f"color: {ORANGE}; font-size: 14px; font-weight: 700;")
             try:
-                if self.unity_communicator.start_server():
+                if self.unity_controller.start_server():
                     self.udp_server_active = True
-                    self.status_vr.setText("VR - Conectado")
-                    self.status_vr.setStyleSheet(f"color: {GREEN}; font-size: 14px; font-weight: 700;")
+                    self.unity_connection_phase = "connected"
                 else:
-                    self.status_vr.setText("VR - Falha")
-                    self.status_vr.setStyleSheet(f"color: {RED}; font-size: 14px; font-weight: 700;")
+                    self.unity_connection_phase = "failed"
             except Exception:
-                self.status_vr.setText("VR - Falha")
-                self.status_vr.setStyleSheet(f"color: {RED}; font-size: 14px; font-weight: 700;")
+                self.unity_connection_phase = "failed"
 
             # 3. ESP32
-            self.status_ortese.setText("ORTESE - Conectando...")
-            self.status_ortese.setStyleSheet(f"color: {ORANGE}; font-size: 14px; font-weight: 700;")
             try:
-                if self.esp32_communicator.connect():
+                if self.esp32_controller.connect():
                     self.esp32_connected = True
-                    self.status_ortese.setText("ORTESE - Conectado")
-                    self.status_ortese.setStyleSheet(f"color: {GREEN}; font-size: 14px; font-weight: 700;")
+                    self.orthosis_connection_phase = "connected"
                 else:
                     self.esp32_connected = False
-                    self.status_ortese.setText("ORTESE - Standby")
-                    self.status_ortese.setStyleSheet(f"color: #ffffff; font-size: 14px; font-weight: 700;")
+                    self.orthosis_connection_phase = "standby"
             except Exception:
                 self.esp32_connected = False
-                self.status_ortese.setText("ORTESE - Falha")
-                self.status_ortese.setStyleSheet(f"color: {RED}; font-size: 14px; font-weight: 700;")
+                self.orthosis_connection_phase = "failed"
+            self._apply_connection_panel()
 
         else:
             # === DESCONECTAR TUDO ===
+            self.disconnection_in_progress = True
             try:
-                self.unity_communicator.stop_server()
+                self.unity_controller.stop_server()
                 self.udp_server_active = False
             except Exception:
                 pass
-            self.status_eeg.setText("EEG - Standby")
-            self.status_eeg.setStyleSheet(f"color: #ffffff; font-size: 14px; font-weight: 700;")
-            self.status_vr.setText("VR - Standby")
-            self.status_vr.setStyleSheet(f"color: #ffffff; font-size: 14px; font-weight: 700;")
-            self.status_ortese.setText("ORTESE - Standby")
-            self.status_ortese.setStyleSheet(f"color: #ffffff; font-size: 14px; font-weight: 700;")
-            self.streaming_thread.stop_streaming()
-            self.connect_btn.setText("Conectar")
-            self.record_btn.setEnabled(False)
+            try:
+                self.esp32_controller.disconnect()
+                self.esp32_connected = False
+            except Exception:
+                pass
+            self.eeg_connection_phase = "standby"
+            self.unity_connection_phase = "standby"
+            self.orthosis_connection_phase = "standby"
+            self.connect_button_enabled = True
+            self.record_button_enabled = False
+            self._apply_connection_panel()
+            self.eeg_stream_controller.disconnect()
+        self._refresh_streaming_state()
     
     def manual_esp32_test(self, direction):
         """Teste manual do envio serial para ESP32"""
         if self.esp32_connected:
-            if direction == 'esquerda':
-                success = self.esp32_communicator.send_trigger_left()
-            else:
-                success = self.esp32_communicator.send_trigger_right()
+            success = self.esp32_controller.send_direction(direction)
             
             if success:
                 side_text = "esquerda" if direction == 'esquerda' else "direita"
@@ -621,10 +773,7 @@ class StreamingWidget(QWidget):
     def send_esp32_signal(self, direction):
         """Envia sinal serial para ESP32 se conectado e o envio automático estiver habilitado"""
         if self.esp32_connected and self.esp32_auto_send_checkbox.isChecked():
-            if direction == 'esquerda':
-                success = self.esp32_communicator.send_trigger_left()
-            else:
-                success = self.esp32_communicator.send_trigger_right()
+            success = self.esp32_controller.send_direction(direction)
             
             if not success:
                 print(f"Falha ao enviar sinal serial para ESP32: {direction}")
@@ -636,10 +785,11 @@ class StreamingWidget(QWidget):
         try:
             if not self.esp32_connected:
                 # Tentar conectar
-                connected = self.esp32_communicator.connect()
+                connected = self.esp32_controller.connect()
                 
                 if connected:
                     self.esp32_connected = True
+                    self.orthosis_connection_phase = "connected"
                     self.esp32_status_label.setText("ESP32: Conectado (COM4)")
                     self.esp32_status_label.setStyleSheet("color: green; font-weight: bold;")
                     self.esp32_toggle_btn.setText("Desconectar ESP32")
@@ -651,8 +801,9 @@ class StreamingWidget(QWidget):
                     QMessageBox.critical(self, "Erro", "Falha ao conectar ESP32.\nVerifique se o ESP32 está conectado na COM4.")
             else:
                 # Desconectar
-                self.esp32_communicator.disconnect()
+                self.esp32_controller.disconnect()
                 self.esp32_connected = False
+                self.orthosis_connection_phase = "standby"
                 self.esp32_status_label.setText("ESP32: Desconectado")
                 self.esp32_status_label.setStyleSheet("color: red; font-weight: bold;")
                 self.esp32_toggle_btn.setText("Conectar ESP32")
@@ -662,11 +813,15 @@ class StreamingWidget(QWidget):
                 QMessageBox.information(self, "Sucesso", "ESP32 desconectado com sucesso!")
                 
         except Exception as e:
+            self.orthosis_connection_phase = "failed"
             QMessageBox.critical(self, "Erro", f"Erro ao conectar/desconectar ESP32: {e}")
+        self._apply_connection_panel()
+        self._refresh_streaming_state()
 
     def _on_esp32_connection(self, connected: bool):
         """Callback para mudanças de conexão ESP32"""
         self.esp32_connected = connected
+        self.orthosis_connection_phase = "connected" if connected else "standby"
         if not connected and hasattr(self, 'esp32_status_label'):
             self.esp32_status_label.setText("ESP32: Desconectado")
             self.esp32_status_label.setStyleSheet("color: red; font-weight: bold;")
@@ -674,11 +829,13 @@ class StreamingWidget(QWidget):
             self.esp32_toggle_btn.setStyleSheet("background-color: #9C27B0; color: white; font-weight: bold;")
             self.esp32_test_left_btn.setEnabled(False)
             self.esp32_test_right_btn.setEnabled(False)
+        self._apply_connection_panel()
+        self._refresh_streaming_state()
     
     def manual_udp_test(self, direction):
         """Teste manual do envio UDP"""
         if self.udp_server_active:
-            success = UDP_sender.enviar_sinal(direction)
+            success = self.unity_controller.send_action(direction)
             if success:
                 side_text = "esquerda" if direction == 'esquerda' else "direita"
                 QMessageBox.information(self, "Teste UDP", f"Sinal enviado: Mão {side_text}")
@@ -690,7 +847,7 @@ class StreamingWidget(QWidget):
     def send_udp_signal(self, direction):
         """Envia sinal UDP se o servidor estiver ativo e o envio automático estiver habilitado"""
         if self.udp_server_active and self.udp_auto_send_checkbox.isChecked():
-            success = UDP_sender.enviar_sinal(direction)
+            success = self.unity_controller.send_action(direction)
             if not success:
                 print(f"Falha ao enviar sinal UDP para {direction}")
             return success
@@ -703,12 +860,13 @@ class StreamingWidget(QWidget):
                 # Tentar iniciar servidor
                 started = False
                 try:
-                    started = self.unity_communicator.start_server()
+                    started = self.unity_controller.start_server()
                 except Exception as e:
                     print(f"Erro ao iniciar servidor UDP: {e}")
 
                 if started:
                     self.udp_server_active = True
+                    self.unity_connection_phase = "connected"
                     self.udp_status_label.setText("Servidor UDP: Ligado")
                     self.udp_status_label.setStyleSheet("color: green; font-weight: bold;")
                     self.udp_toggle_btn.setText("Parar Servidor UDP")
@@ -721,10 +879,11 @@ class StreamingWidget(QWidget):
             else:
                 # Parar servidor
                 try:
-                    self.unity_communicator.stop_server()
+                    self.unity_controller.stop_server()
                 except Exception:
                     pass
                 self.udp_server_active = False
+                self.unity_connection_phase = "standby"
                 self.udp_status_label.setText("Servidor UDP: Desligado")
                 self.udp_status_label.setStyleSheet("color: red; font-weight: bold;")
                 self.udp_toggle_btn.setText("Iniciar Servidor UDP")
@@ -733,7 +892,10 @@ class StreamingWidget(QWidget):
                 self.udp_test_right_btn.setEnabled(False)
                 QMessageBox.information(self, "Sucesso", "Servidor UDP parado com sucesso!")
         except Exception as e:
+            self.unity_connection_phase = "failed"
             QMessageBox.critical(self, "Erro", f"Erro ao alternar servidor UDP: {e}")
+        self._apply_connection_panel()
+        self._refresh_streaming_state()
     
     def toggle_recording(self):
         """Inicia/para a gravação"""
@@ -743,40 +905,36 @@ class StreamingWidget(QWidget):
                 QMessageBox.warning(self, "Erro", "Selecione um paciente!")
                 return
             
-            self.current_patient_id = self.patient_combo.currentData()
+            selected_patient_id = int(self.patient_combo.currentData())
             patient_name = self.patient_combo.currentText().split(" (ID:")[0]
             
             # Obter tarefa do dropdown
             task = self.task_combo.currentText().lower().replace(" ", "_")  # ex: "Baseline" -> "baseline"
             
             # Verificar se é modo jogo
-            self.game_mode = (task == "jogo")
-            if self.game_mode:
-                if self.model is None:
+            if task == "jogo":
+                if not self.inference_controller.has_loaded_model():
                     if not self.load_model():
                         return
                 # Limpar variáveis do jogo
                 self.predictions.clear()
                 self.eeg_buffer.clear()
                 self.samples_since_last_prediction = 0
-                self.prediction_label.setText("Aguardando predição...")
-                self.prob_left_label.setText("Mão Esquerda: 0%")
-                self.prob_right_label.setText("Mão Direita: 0%")
+                self._apply_prediction_display()
+                self._apply_game_stats()
                 
                 # Resetar dados de acurácia
                 self.reset_accuracy_data()
                 
                 # Resetar controle de resposta
                 self.waiting_for_response = False
-                self.response_received = False
                 
                 # Resetar controle de IA
                 self.ai_prediction_enabled = False
                 self.task_start_time = None
                 
                 # Resetar status visual da IA
-                self.ai_status_label.setText("🤖 IA: Aguardando tarefa")
-                self.ai_status_label.setStyleSheet("color: gray; font-weight: bold; font-size: 12px;")
+                self._set_ai_status("waiting_task")
                 
                 # Resetar contadores de ações no início da gravação
                 self.reset_action_counters()
@@ -798,7 +956,7 @@ class StreamingWidget(QWidget):
                 # Usar logger OpenBCI se disponível
                 if USE_OPENBCI_LOGGER:
                     self.csv_logger = OpenBCICSVLogger(
-                        patient_id=f"P{self.current_patient_id:03d}",
+                        patient_id=f"P{selected_patient_id:03d}",
                         task=task,
                         patient_name=patient_name,  # Adicionar nome do paciente
                         base_path=os.path.dirname(get_recording_path(""))
@@ -821,25 +979,38 @@ class StreamingWidget(QWidget):
                 # Resetar contadores
                 self.reset_action_counters()
                 
-                # Registrar gravação no banco
+                # Registrar gravação via application/interface adapters
                 recording_path = display_path if USE_OPENBCI_LOGGER else filename
-                self.db_manager.add_recording(self.current_patient_id, recording_path, task)
+                self.current_recording_id = self.recording_controller.start_recording(
+                    StartRecordingRequest(
+                        patient_id=selected_patient_id,
+                        filename=recording_path,
+                        task_type=task,
+                    )
+                )
+                started_session = self.session_controller.start_session(
+                    StartSessionRequest(
+                        patient_id=selected_patient_id,
+                        task_type=task,
+                        recording_id=self.current_recording_id,
+                        started_at_epoch=time.time(),
+                    )
+                )
+                self._refresh_streaming_state(session=started_session)
                 
                 # =====================================================================
                 # ENVIAR TRIGGER PARA ATIVAR A TAREFA NO VR
                 # =====================================================================
                 try:
-                    communicator = UnityCommunicator()
-                    if communicator.is_active and communicator.tcp_connected:
+                    if self.unity_controller.is_server_active() and self.unity_controller.is_client_connected():
                         time.sleep(0.5)  # Pequeno delay para garantir que tudo está pronto
-                        communicator.send_trigger()
+                        self.unity_controller.send_trigger()
                         print(f"[GRAVAÇÃO] send_trigger() enviado para VR", flush=True)
                 except Exception as e:
                     print(f"[GRAVAÇÃO] Erro ao enviar send_trigger(): {e}", flush=True)
                 # =====================================================================
                 
                 # Iniciar timer de sessão
-                self.session_start_time = time.time()
                 self.session_timer.start(1000)  # Atualizar a cada segundo
                 
             except Exception as e:
@@ -858,23 +1029,21 @@ class StreamingWidget(QWidget):
             self.csv_logger = None
             
             self.is_recording = False
-            self.game_mode = False  # Desativar modo jogo
             
             # =====================================================================
             # ENVIAR END_TASK PARA O VR
             # =====================================================================
             current_task = self.task_combo.currentText()
             try:
-                communicator = UnityCommunicator()
-                if communicator.is_active and communicator.tcp_connected:
+                if self.unity_controller.is_server_active() and self.unity_controller.is_client_connected():
                     # Enviar end_task
-                    communicator.end_task()
+                    self.unity_controller.end_task()
                     print(f"[GRAVAÇÃO] end_task() enviado para VR", flush=True)
                     
                     # Se for jogo, também enviar end_session com mensagem motivacional
                     if current_task == "Jogo":
                         time.sleep(0.3)  # Pequeno delay
-                        communicator.end_session("Parabéns! Sessão finalizada com sucesso!")
+                        self.unity_controller.end_session("Parabéns! Sessão finalizada com sucesso!")
                         print(f"[GRAVAÇÃO] end_session() com mensagem enviada para VR", flush=True)
             except Exception as e:
                 print(f"[GRAVAÇÃO] Erro ao enviar end_task/end_session: {e}", flush=True)
@@ -890,15 +1059,13 @@ class StreamingWidget(QWidget):
             
             # Resetar controle de resposta
             self.waiting_for_response = False
-            self.response_received = False
             
             # Resetar controle de IA
             self.ai_prediction_enabled = False
             self.task_start_time = None
             
             # Resetar status visual da IA
-            self.ai_status_label.setText("🤖 IA: Parada")
-            self.ai_status_label.setStyleSheet("color: gray; font-weight: bold; font-size: 12px;")
+            self._set_ai_status("stopped")
             
             # Resetar contadores de ações
             self.reset_action_counters()
@@ -916,11 +1083,26 @@ class StreamingWidget(QWidget):
             if self.baseline_timer.isActive():
                 self.baseline_timer.stop()
                 self.baseline_label.setText("")
+            self.marker_controller.reset_state()
+            self._update_marker_labels(self.marker_controller.get_state())
             
             # Parar timer de sessão
             self.session_timer.stop()
             self.session_elapsed_seconds = 0
             self.update_session_timer()
+
+            current_session = self._get_current_session()
+            if self.current_recording_id is not None:
+                duration_seconds = 0
+                if current_session is not None:
+                    duration_seconds = max(
+                        0,
+                        int(time.time() - float(current_session.started_at_epoch)),
+                    )
+                self.recording_controller.stop_recording(self.current_recording_id, duration_seconds)
+                self.current_recording_id = None
+            ended_session = self.session_controller.end_session()
+            self._refresh_streaming_state()
             
             # Verificar se é tarefa de treino para mostrar popup de treinamento
             print(f"[DEBUG] stop_recording: current_task={current_task}, logger_present={logger is not None}")
@@ -945,7 +1127,10 @@ class StreamingWidget(QWidget):
                     # show_training_dialog agora suporta auto_start=True
                     try:
                         print("[DEBUG] stop_recording: launching auto training dialog")
-                        self.show_training_dialog(csv_file_path, self.current_patient_id, patient_name, auto_start=True)
+                        patient_id = self.patient_combo.currentData()
+                        if ended_session is not None:
+                            patient_id = ended_session.patient_id
+                        self.show_training_dialog(csv_file_path, patient_id, patient_name, auto_start=True)
                     except Exception as e:
                         print(f"[DEBUG] stop_recording: failed to start training dialog: {e}")
                         QMessageBox.information(self, "Sucesso", "Gravação de treino finalizada!")
@@ -963,7 +1148,6 @@ class StreamingWidget(QWidget):
                 print("⚠️  Timeout: Não recebeu resposta CORRECT/WRONG, enviando sinal de fallback")
                 # Resetar estado e enviar novo sinal
                 self.waiting_for_response = False
-                self.response_received = False
                 
             import random
             actions = ['T1', 'T2'] #T1 para movimento esquerda, T2 para movimento direita
@@ -971,7 +1155,6 @@ class StreamingWidget(QWidget):
             
             # Marcar que está aguardando resposta
             self.waiting_for_response = True
-            self.response_received = False
             
             # Abrir janela de IA por 5 segundos (fallback)
             self.ai_prediction_enabled = True
@@ -981,8 +1164,7 @@ class StreamingWidget(QWidget):
             print(f"🤖 Janela de IA aberta por {self.ai_window_duration/1000}s (fallback)")
             
             # Atualizar status visual
-            self.ai_status_label.setText("🟡 IA: Ativa (fallback)")
-            self.ai_status_label.setStyleSheet("color: orange; font-weight: bold; font-size: 12px;")
+            self._set_ai_status("active_fallback")
             
             # Fechar automaticamente a janela após 5 segundos
             QTimer.singleShot(self.ai_window_duration, self.close_ai_window)
@@ -999,7 +1181,6 @@ class StreamingWidget(QWidget):
             
             # Marcar que está aguardando resposta
             self.waiting_for_response = True
-            self.response_received = False
             
             # Abrir janela de IA por 5 segundos
             self.ai_prediction_enabled = True
@@ -1009,8 +1190,7 @@ class StreamingWidget(QWidget):
             print(f"🤖 Janela de IA aberta por {self.ai_window_duration/1000}s")
             
             # Atualizar status visual
-            self.ai_status_label.setText("🟢 IA: Ativa (5s)")
-            self.ai_status_label.setStyleSheet("color: green; font-weight: bold; font-size: 12px;")
+            self._set_ai_status("active_window")
             
             # Fechar automaticamente a janela após 5 segundos
             QTimer.singleShot(self.ai_window_duration, self.close_ai_window)
@@ -1023,43 +1203,31 @@ class StreamingWidget(QWidget):
         print("🚫 Janela de IA fechada automaticamente")
         
         # Atualizar status visual
-        self.ai_status_label.setText("🔴 IA: Inativa")
-        self.ai_status_label.setStyleSheet("color: red; font-weight: bold; font-size: 12px;")
+        self._set_ai_status("inactive")
 
     def add_marker(self, marker_type):
         """Adiciona um marcador durante a gravação"""
         if self.is_recording and self.csv_logger:
-            # Incrementar contador
-            if marker_type == "T1":
-                self.t1_counter += 1
-                self.t1_counter_label.setText(f"T1: {self.t1_counter}")
+            current_task = self.task_combo.currentText()
+            result = self.marker_controller.register_marker(marker_type, current_task)
+            if not result.accepted:
+                if result.reason == "baseline_active":
+                    QMessageBox.warning(
+                        self,
+                        "Baseline Ativo",
+                        "Não é possível adicionar marcadores durante o baseline",
+                    )
+                return
 
-                current_task = self.task_combo.currentText()
-                if current_task in ["Teste", "Treino", "Jogo"]:
-                    if self.udp_server_active:
-                        UDP_sender.enviar_sinal('trigger_left')
-                    self.send_esp32_signal('esquerda')
+            state = result.state
+            self._update_marker_labels(state)
 
-            elif marker_type == "T2":
-                self.t2_counter += 1
-                self.t2_counter_label.setText(f"T2: {self.t2_counter}")
-
-                current_task = self.task_combo.currentText()
-                if current_task in ["Teste", "Treino", "Jogo"]:
-                    if self.udp_server_active:
-                        UDP_sender.enviar_sinal('trigger_right')
-                    self.send_esp32_signal('direita')
-
-            # Atualizar barra de marcadores
-            self._update_marcador_text()
+            if result.external_signal and self.udp_server_active:
+                self.unity_controller.send_action(result.external_signal)
+            if result.esp32_direction:
+                self.send_esp32_signal(result.esp32_direction)
 
             if USE_OPENBCI_LOGGER:
-                # Para o logger OpenBCI, verificar se baseline está ativo
-                if hasattr(self.csv_logger, 'is_baseline_active'):
-                    if self.csv_logger.is_baseline_active():
-                        QMessageBox.warning(self, "Baseline Ativo", 
-                                          "Não é possível adicionar marcadores durante o baseline")
-                        return
                 # Marcar para adicionar na próxima amostra
                 self.pending_marker = marker_type
             else:
@@ -1079,21 +1247,23 @@ class StreamingWidget(QWidget):
     def start_baseline(self):
         """Inicia o período de baseline"""
         if self.is_recording and self.csv_logger:
+            baseline_state = self.marker_controller.start_baseline(300)
             if USE_OPENBCI_LOGGER:
                 # Logger OpenBCI
                 if hasattr(self.csv_logger, 'start_baseline'):
                     self.csv_logger.start_baseline()
-                    
-                    # Iniciar timer visual
-                    self.baseline_timer.timeout.connect(self.update_baseline_timer)
-                    self.baseline_timer.start(1000)
                 else:
                     # Fallback
                     self.csv_logger.add_marker("BASELINE")
             else:
                 # Logger simples
                 self.csv_logger.add_marker("BASELINE")
-            
+
+            # Iniciar timer visual
+            if not self.baseline_timer.isActive():
+                self.baseline_timer.start(1000)
+            self._update_marker_labels(baseline_state)
+             
             # Desabilitar outros botões por 5 minutos
             self.t1_btn.setEnabled(False)
             self.t2_btn.setEnabled(False) 
@@ -1106,46 +1276,18 @@ class StreamingWidget(QWidget):
     
     def update_baseline_timer(self):
         """Atualiza o timer de baseline"""
-        if USE_OPENBCI_LOGGER and hasattr(self.csv_logger, 'get_baseline_remaining'):
-            remaining = self.csv_logger.get_baseline_remaining()
-            
-            if remaining <= 0:
-                # Baseline finalizado
-                self.baseline_timer.stop()
-                self.t1_btn.setEnabled(True)
-                self.t2_btn.setEnabled(True)
-                # self.baseline_btn.setEnabled(True)  # Botão removido
-                
-                task_name = "jogo" if self.task_combo.currentText() == "Jogo" else "gravação"
-                status_text = "Jogando" if task_name == "jogo" else "Gravando"
-                self.recording_label.setText(f"{status_text} - Baseline finalizado")
-                QMessageBox.information(self, "Baseline", "Período de baseline finalizado!")
-            else:
-                # Atualizar display
-                minutes = int(remaining // 60)
-                seconds = int(remaining % 60)
-                task_name = "jogo" if self.task_combo.currentText() == "Jogo" else "gravação"
-                status_text = "Jogando" if task_name == "jogo" else "Gravando"
-                self.recording_label.setText(f"{status_text} - Baseline: {minutes:02d}:{seconds:02d}")
-        else:
-            # Fallback para timer simples
-            if hasattr(self, 'baseline_time_remaining'):
-                self.baseline_time_remaining -= 1
-                if self.baseline_time_remaining <= 0:
-                    self.baseline_timer.stop()
-                    self.t1_btn.setEnabled(True)
-                    self.t2_btn.setEnabled(True)
-                    # self.baseline_btn.setEnabled(True)  # Botão removido
-                    self.recording_label.setText("Gravando - Baseline finalizado")
-                else:
-                    minutes = self.baseline_time_remaining // 60
-                    seconds = self.baseline_time_remaining % 60
-                    self.recording_label.setText(f"Gravando - Baseline: {minutes:02d}:{seconds:02d}")
-        if self.baseline_time_remaining > 0:
-            minutes = self.baseline_time_remaining // 60
-            seconds = self.baseline_time_remaining % 60
+        result = self.marker_controller.tick_baseline()
+        state = result.state
+        remaining = state.baseline_remaining_seconds
+        self._update_marker_labels(state)
+
+        if remaining > 0:
+            minutes = remaining // 60
+            seconds = remaining % 60
             self.baseline_label.setText(f"Baseline: {minutes:02d}:{seconds:02d}")
-            self.baseline_time_remaining -= 1
+            task_name = "jogo" if self.task_combo.currentText() == "Jogo" else "gravação"
+            status_text = "Jogando" if task_name == "jogo" else "Gravando"
+            self.recording_label.setText(f"{status_text} - Baseline: {minutes:02d}:{seconds:02d}")
         else:
             # Baseline terminado
             self.baseline_timer.stop()
@@ -1156,7 +1298,10 @@ class StreamingWidget(QWidget):
                 self.t1_btn.setEnabled(True)
                 self.t2_btn.setEnabled(True)
                 # self.baseline_btn.setEnabled(True)  # Botão removido
-                self.recording_label.setText("Gravando - Baseline finalizado")
+                task_name = "jogo" if self.task_combo.currentText() == "Jogo" else "gravação"
+                status_text = "Jogando" if task_name == "jogo" else "Gravando"
+                self.recording_label.setText(f"{status_text} - Baseline finalizado")
+                QMessageBox.information(self, "Baseline", "Período de baseline finalizado!")
                 
                 # Resetar texto após 3 segundos
                 QTimer.singleShot(3000, self.reset_recording_label)
@@ -1180,379 +1325,100 @@ class StreamingWidget(QWidget):
     def load_model(self):
         """Carrega modelo CNN para inferência"""
         try:
-            current_dir = Path(__file__).parent.parent.parent
-
-            # Candidate directories to search for TensorFlow models (prefer .keras)
-            candidate_dirs = [
-                current_dir / 'bci' / 'models',    # bci/models
-                current_dir / 'models',            # workspace/models (if present)
-                current_dir / 'files',             # workspace/files
-                current_dir / 'HardThinking' / 'files',
-                Path(os.getcwd()) / 'bci' / 'models',
-            ]
-
-            tf_candidates = []
-            for d in candidate_dirs:
-                try:
-                    if d.exists():
-                        tf_candidates.extend(list(d.glob('*.keras')))
-                        tf_candidates.extend(list(d.glob('*.h5')))
-                except Exception:
-                    continue
-
-            # If we found any TF models, pick the most recently modified
-            if tf_candidates:
-                tf_candidates = sorted(tf_candidates, key=lambda p: p.stat().st_mtime, reverse=True)
-                chosen = str(tf_candidates[0])
-                print(f"Carregando modelo TensorFlow encontrado: {chosen}")
-                return self.load_model_from_path(chosen)
-
-            QMessageBox.warning(self, "Erro", "Modelo não encontrado! (busca por .keras/.h5 em bci/models, files, HardThinking/files)")
+            model = self.inference_controller.load_latest_model()
+            self._update_model_status(model)
+            print(f"Carregando modelo TensorFlow encontrado: {model.path}")
+            return True
+        except ValueError as exc:
+            self.model_status_label.setText(f"Erro: {exc}")
+            QMessageBox.warning(
+                self,
+                "Erro",
+                f"Modelo não encontrado! {exc}",
+            )
             return False
         except Exception as e:
+            self.model_status_label.setText(f"Erro ao carregar modelo: {e}")
             QMessageBox.critical(self, "Erro", f"Erro ao carregar modelo: {e}")
             return False
+
     def load_model_from_path(self, model_path: str) -> bool:
         """Tenta carregar um modelo explicitamente a partir de um caminho.
 
         Retorna True se carregado com sucesso, False caso contrário.
         """
         try:
-            # Delegar para adapter TensorFlow se for .h5 ou .keras
-            if model_path.endswith('.h5') or model_path.endswith('.keras'):
-                # Verificar se TensorFlowMLAdapter foi importado com sucesso
-                if TensorFlowMLAdapter is None:
-                    msg = 'Falha: TensorFlowMLAdapter não disponível. TensorFlow não está instalado?'
-                    print(msg)
-                    try:
-                        os.makedirs(str(Path(__file__).parent.parent / 'logs'), exist_ok=True)
-                        ts = time.strftime('%Y%m%d_%H%M%S')
-                        lf = Path(__file__).parent.parent / 'logs' / f'model_load_error_{ts}.log'
-                        with open(lf, 'w', encoding='utf-8') as fh:
-                            fh.write(msg + '\n')
-                            fh.write('Instale TensorFlow com: pip install tensorflow\n')
-                    except Exception:
-                        lf = None
-                    label_txt = 'Erro: TensorFlow adapter não disponível'
-                    if lf:
-                        label_txt += f" (ver {lf.name})"
-                    self.model_status_label.setText(label_txt)
-                    return False
-
-                # Instanciar adapter e carregar o modelo com tratamento de erros
-                try:
-                    self.tf_adapter = TensorFlowMLAdapter(config={})
-                except Exception as e:
-                    tb = traceback.format_exc()
-                    print(f'Falha ao instanciar TensorFlowMLAdapter: {e}\n{tb}')
-                    try:
-                        os.makedirs(str(Path(__file__).parent.parent / 'logs'), exist_ok=True)
-                        ts = time.strftime('%Y%m%d_%H%M%S')
-                        lf = Path(__file__).parent.parent / 'logs' / f'model_load_error_{ts}.log'
-                        with open(lf, 'w', encoding='utf-8') as fh:
-                            fh.write('Falha ao instanciar TensorFlowMLAdapter:\n')
-                            fh.write(tb)
-                        self.model_status_label.setText(f"Erro: instanciar adapter TF (ver {lf.name})")
-                    except Exception:
-                        pass
-                    return False
-
-                try:
-                    tf_model = self.tf_adapter.load_model(model_path)
-                except Exception as e:
-                    tb = traceback.format_exc()
-                    print(f'Exceção ao carregar modelo via adapter: {e}\n{tb}')
-                    try:
-                        os.makedirs(str(Path(__file__).parent.parent / 'logs'), exist_ok=True)
-                        ts = time.strftime('%Y%m%d_%H%M%S')
-                        lf = Path(__file__).parent.parent / 'logs' / f'model_load_error_{ts}.log'
-                        with open(lf, 'w', encoding='utf-8') as fh:
-                            fh.write('Exceção ao carregar modelo via adapter:\n')
-                            fh.write(tb)
-                        self.model_status_label.setText(f"Erro ao carregar modelo (ver {lf.name})")
-                    except Exception:
-                        pass
-                    return False
-
-                if tf_model is None:
-                    print('Falha ao carregar modelo .keras/.h5 via adapter: None retornado')
-                    try:
-                        self.model_status_label.setText('Erro: adapter retornou None ao carregar modelo')
-                    except Exception:
-                        pass
-                    return False
-
-                self.model = tf_model
-                self.model_type = 'tensorflow'
-                # Inspect model input shape and store for runtime adaptation
-                try:
-                    inp_shape = None
-                    try:
-                        # Keras model: model.input_shape or model.inputs[0].shape
-                        if hasattr(self.model, 'input_shape') and self.model.input_shape is not None:
-                            inp_shape = tuple(self.model.input_shape)
-                        elif hasattr(self.model, 'inputs') and getattr(self.model, 'inputs'):
-                            inp_shape = tuple(self.model.inputs[0].shape.as_list())
-                    except Exception:
-                        inp_shape = None
-
-                    self.model_input_shape = inp_shape
-                    print(f"Modelo TensorFlow carregado: {model_path} (input_shape={self.model_input_shape})")
-                    try:
-                        self.model_status_label.setText(f"Modelo carregado: {os.path.basename(model_path)}")
-                    except Exception:
-                        pass
-                except Exception:
-                    print(f"Modelo TensorFlow carregado: {model_path} (input_shape: unknown)")
-                    self.model_input_shape = None
-
-                # If the model expects a different time dimension than runtime window_size,
-                # attempt to detect and warn. We'll still try to adapt at predict time.
-                try:
-                    if self.model_input_shape is not None:
-                        # Typical shape: (None, time_steps, channels) or (time_steps, channels)
-                        ms = list(self.model_input_shape)
-                        # remove None or batch dim
-                        if len(ms) == 3 and (ms[0] is None or ms[0] == -1):
-                            model_time = int(ms[1]) if ms[1] is not None else None
-                            model_channels = int(ms[2]) if ms[2] is not None else None
-                        elif len(ms) == 2:
-                            model_time = int(ms[0]) if ms[0] is not None else None
-                            model_channels = int(ms[1]) if ms[1] is not None else None
-                        else:
-                            model_time = None
-                            model_channels = None
-
-                        self.model_expected_time = model_time
-                        self.model_expected_channels = model_channels
-                        if model_time is not None and model_time != self.window_size:
-                            print(f"Aviso: modelo espera {model_time} timesteps, runtime window_size={self.window_size}. Tentarei adaptar no predict.")
-                    else:
-                        self.model_expected_time = None
-                        self.model_expected_channels = None
-                except Exception:
-                    self.model_expected_time = None
-                    self.model_expected_channels = None
-
-                return True
-
+            model = self.inference_controller.load_model(model_path)
+            self._update_model_status(model)
+            self._refresh_streaming_state(loaded_model=model)
+            print(f"Modelo TensorFlow carregado: {model_path}")
+            return True
         except Exception as e:
             print(f"Erro ao carregar modelo: {e}")
-
-        # If TF adapter not available in-process, try starting inference subprocess
-        # This allows the GUI process to remain TF-free and call the subprocess via HTTP
-        try:
-            if model_path.endswith('.keras') or model_path.endswith('.h5'):
-                # If we couldn't load in-process, start external inference server
-                try:
-                    # copy model to bci/models if necessary
-                    dest = Path(__file__).parent.parent / 'models' / os.path.basename(model_path)
-                    os.makedirs(dest.parent, exist_ok=True)
-                    if not Path(model_path).samefile(dest):
-                        import shutil
-                        shutil.copy2(model_path, str(dest))
-                    self.inference_model_path = str(dest)
-                except Exception:
-                    # fallback to original path
-                    self.inference_model_path = model_path
-
-                # start subprocess (if not already running)
-                started = self.start_inference_subprocess(self.inference_model_path)
-                if started:
-                    self.model_type = 'tensorflow'
-                    try:
-                        self.model_status_label.setText(f"Servidor de inferência ativo (porta {self.inference_port})")
-                    except Exception:
-                        pass
-                    return True
-        except Exception:
-            print("Modelo não carregado: formato desconhecido ou arquivo inexistente")
+            self.model_status_label.setText(f"Erro ao carregar modelo: {e}")
             return False
 
     def find_tf_models(self) -> List[str]:
         """Procura por arquivos .keras/.h5 em locais comuns e retorna caminhos absolutos ordenados por data (mais recente primeiro)."""
-        current_dir = Path(__file__).parent.parent.parent
-        candidate_dirs = [
-            current_dir / 'bci' / 'models',
-            current_dir / 'models',
-            current_dir / 'files',
-            current_dir / 'HardThinking' / 'files',
-            Path(os.getcwd()) / 'bci' / 'models',
-        ]
-
-        found = []
-        for d in candidate_dirs:
-            try:
-                if d.exists():
-                    found.extend([str(p) for p in d.glob('*.keras')])
-                    found.extend([str(p) for p in d.glob('*.h5')])
-            except Exception:
-                continue
-
-        # Remover duplicatas e ordenar por mtime desc
-        unique = sorted(set(found), key=lambda p: Path(p).stat().st_mtime if Path(p).exists() else 0, reverse=True)
-        return unique
-
-    def start_inference_subprocess(self, model_path: str) -> bool:
-        """Start a local inference subprocess that serves the Keras model over HTTP.
-
-        Returns True if the subprocess started (or already running).
-        """
         try:
-            if self.inference_proc is not None and self.inference_proc.poll() is None:
-                # already running
-                return True
-
-            server_script = Path(__file__).parent.parent / 'inference' / 'keras_inference_server.py'
-            if not server_script.exists():
-                print(f'Inference server script not found: {server_script}')
-                return False
-
-            # Start subprocess in background
-            import subprocess
-            cmd = [sys.executable, str(server_script), '--model', str(model_path), '--port', str(self.inference_port)]
-            # On Windows, creationflags to open in new console isn't needed; run hidden
-            self.inference_proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
-            # give server short time to warm up
-            time.sleep(0.5)
-            return True
+            return [model.path for model in self.inference_controller.list_models()]
         except Exception as e:
-            print(f'Failed to start inference subprocess: {e}')
-            return False
+            print(f"Erro ao listar modelos TensorFlow: {e}")
+            return []
 
-    def stop_inference_subprocess(self):
-        try:
-            if self.inference_proc is not None:
-                self.inference_proc.terminate()
-                self.inference_proc.wait(timeout=2)
-                self.inference_proc = None
-        except Exception:
-            pass
+    def _update_model_status(self, model: ModelViewModel):
+        self._refresh_streaming_state(loaded_model=model)
+        self.model_status_label.setText(f"Modelo carregado: {model.name}")
+        expected_time_steps = model.expected_time_steps
+        if expected_time_steps is not None and expected_time_steps != self.window_size:
+            print(
+                f"Aviso: modelo espera {expected_time_steps} timesteps, "
+                f"runtime window_size={self.window_size}. Adaptacao sera aplicada na inferencia."
+            )
             
     def update_game_stats(self):
         """Atualiza estatísticas do jogo"""
-        if not self.game_mode or not self.predictions:
+        if not self._is_game_mode():
             return
-            
-        # Calcular estatísticas
-        total_preds = len(self.predictions)
-        left_count = sum(1 for _, pred, _ in self.predictions if pred == 0)
-        right_count = sum(1 for _, pred, _ in self.predictions if pred == 1)
-        
-        # Contar transições
-        transitions = 0
-        for i in range(1, len(self.predictions)):
-            if self.predictions[i][1] != self.predictions[i-1][1]:
-                transitions += 1
-                
-        # Calcular confiança média
-        avg_conf = np.mean([conf for _, _, conf in self.predictions]) * 100
-        
-        # Atualizar labels
-        self.total_predictions_label.setText(f"Total de predições: {total_preds}")
-        self.left_predictions_label.setText(f"Mão esquerda: {left_count}")
-        self.right_predictions_label.setText(f"Mão direita: {right_count}")
-        self.transitions_label.setText(f"Transições: {transitions}")
-        self.confidence_label.setText(f"Confiança média: {avg_conf:.1f}%")
+        self._apply_game_stats()
         
     def process_accuracy_message(self, message):
         """Processa mensagem UDP recebida para cálculo de acurácia"""
         print(f"🔍 DEBUG: Mensagem recebida para acurácia: '{message}'")
         
-        if not self.game_mode:
+        if not self._is_game_mode():
             print("🔍 DEBUG: Ignorando mensagem - não está em modo jogo")
             return
             
         try:
-            # Parse da mensagem: "RED_FLOWER,TRIGGER_ACTION_LEFT"
-            if "," in message:
-                parts = message.strip().split(",")
-                if len(parts) == 2:
-                    flower_color = parts[0].strip()
-                    trigger_action = parts[1].strip()
-                    
-                    # Mapear cor para ação esperada
-                    if flower_color == "RED_FLOWER":
-                        expected_action = "LEFT"  # Vermelho = esquerda esperada
-                    elif flower_color == "BLUE_FLOWER":
-                        expected_action = "RIGHT"  # Azul = direita esperada
-                    else:
-                        print(f"Cor de flor desconhecida: {flower_color}")
-                        return
-                    
-                    # Mapear trigger para ação real
-                    if trigger_action == "TRIGGER_ACTION_LEFT":
-                        real_action = "LEFT"
-                    elif trigger_action == "TRIGGER_ACTION_RIGHT":
-                        real_action = "RIGHT"
-                    else:
-                        print(f"Trigger desconhecido: {trigger_action}")
-                        return
-                    
-                    # Calcular se foi acerto
-                    is_correct = (expected_action == real_action)
-                    
-                    # Atualizar contadores
-                    self.accuracy_total += 1
-                    if is_correct:
-                        self.accuracy_correct += 1
-                    
-                    # Armazenar dados
-                    self.accuracy_data.append((expected_action, real_action, is_correct))
-                    
-                    # Atualizar interface
-                    self.update_accuracy_display()
-                    
-                    # Log para debug
-                    status = "✓" if is_correct else "✗"
-                    print(f"Acurácia: {flower_color} -> {expected_action} vs {trigger_action} -> {real_action} {status}")
-                    
+            trial = AccuracyPresenter.parse_message(message)
+            if trial is None:
+                print(f"Mensagem de acurácia ignorada: {message}")
+                return
+
+            self.accuracy_trials.append(trial)
+            self.update_accuracy_display()
+
+            status = "✓" if trial.is_correct else "✗"
+            print(
+                f"Acurácia: {trial.expected_action} vs {trial.real_action} {status}"
+            )
         except Exception as e:
             print(f"Erro ao processar mensagem de acurácia: {e}")
             
     def update_accuracy_display(self):
         """Atualiza a interface de acurácia"""
-        if self.accuracy_total == 0:
-            accuracy_percent = 0
-        else:
-            accuracy_percent = (self.accuracy_correct / self.accuracy_total) * 100
-            
-        # Atualizar label principal
-        self.accuracy_label.setText(f"Acurácia: {accuracy_percent:.1f}% ({self.accuracy_correct}/{self.accuracy_total})")
-        
-        # Atualizar detalhes
-        if self.accuracy_data:
-            last_trial = self.accuracy_data[-1]
-            expected, real, correct = last_trial
-            status = "✓ Correto" if correct else "✗ Erro"
-            self.accuracy_details_label.setText(f"Último: {expected} vs {real} - {status}")
-        
-        # Atualizar cor baseada na acurácia
-        if accuracy_percent >= 80:
-            color = "#4CAF50"  # Verde
-        elif accuracy_percent >= 60:
-            color = "#FF9800"  # Laranja
-        else:
-            color = "#f44336"  # Vermelho
-            
-        self.accuracy_label.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {color};")
+        self._apply_accuracy_display()
         
     def reset_accuracy_data(self):
         """Reseta os dados de acurácia"""
-        self.accuracy_data.clear()
-        self.accuracy_correct = 0
-        self.accuracy_total = 0
-        self.accuracy_label.setText("Acurácia: 0% (0/0)")
-        self.accuracy_details_label.setText("Esperado vs Real")
+        self.accuracy_trials.clear()
+        self._apply_accuracy_display()
     
     def reset_action_counters(self):
         """Reseta os contadores de ações T1 e T2"""
-        self.t1_counter = 0
-        self.t2_counter = 0
-        self.t1_counter_label.setText("T1: 0")
-        self.t2_counter_label.setText("T2: 0")
-        self._update_marcador_text()
+        state = self.marker_controller.reset_state()
+        self._update_marker_labels(state)
         print("🔄 Contadores de ações resetados")
         
     def start_accuracy_udp_receiver(self):
@@ -1570,7 +1436,7 @@ class StreamingWidget(QWidget):
         
     def predict_movement(self, eeg_data):
         """Faz predição do movimento com o modelo CNN"""
-        if not self.game_mode or self.model is None:
+        if not self._is_game_mode() or not self.inference_controller.has_loaded_model():
             return
         # If already used a prediction in this window, ignore further predictions
         if getattr(self, 'prediction_locked', False):
@@ -1584,97 +1450,21 @@ class StreamingWidget(QWidget):
         if self.task_start_time is not None:
             elapsed_time = time.time() * 1000 - self.task_start_time  # em ms
             if elapsed_time > self.ai_window_duration:
-                self.ai_prediction_enabled = False
+                self.close_ai_window()
                 print(f"🚫 Janela de IA fechada após {self.ai_window_duration/1000}s")
                 return
             
         try:
-            # Normalização por canal (usa self.channels)
-            for ch in range(self.channels):
-                channel_data = eeg_data[:, ch]
-                q75, q25 = np.percentile(channel_data, [75, 25])
-                iqr = q75 - q25
-                if iqr == 0:
-                    iqr = 1.0
-                channel_mean = np.mean(channel_data)
-                eeg_data[:, ch] = (channel_data - channel_mean) / iqr
-            
-            # Escolha entre inferência TensorFlow
-            # Before inference, adapt eeg_data time dimension to model if necessary
-            try:
-                target_time = getattr(self, 'model_expected_time', None)
-                target_channels = getattr(self, 'model_expected_channels', None)
-            except Exception:
-                target_time = None
-                target_channels = None
-
-            # ensure eeg_data shape is (time, channels)
-            # If model expects different time length, trim or pad (simple nearest strategy)
-            if target_time is not None and target_time != eeg_data.shape[0]:
-                if target_time < eeg_data.shape[0]:
-                    # trim center region
-                    start = (eeg_data.shape[0] - target_time) // 2
-                    eeg_data = eeg_data[start:start + target_time, :]
-                else:
-                    # pad zeros at end
-                    pad_rows = target_time - eeg_data.shape[0]
-                    pad = np.zeros((pad_rows, eeg_data.shape[1]), dtype=eeg_data.dtype)
-                    eeg_data = np.vstack([eeg_data, pad])
-
-            # If model expects different channels, try to adapt (trim or pad with zeros)
-            if target_channels is not None and target_channels != eeg_data.shape[1]:
-                if target_channels < eeg_data.shape[1]:
-                    eeg_data = eeg_data[:, :target_channels]
-                else:
-                    pad_cols = target_channels - eeg_data.shape[1]
-                    pad = np.zeros((eeg_data.shape[0], pad_cols), dtype=eeg_data.dtype)
-                    eeg_data = np.hstack([eeg_data, pad])
-
-            # Now do inference
-            if self.model_type == 'tensorflow':
-                # prefer in-process adapter if available
-                if self.tf_adapter is not None and self.model is not None:
-                    # reshape according to model expected dims (time, channels)
-                    time_dim = getattr(self, 'model_expected_time', eeg_data.shape[0])
-                    chan_dim = getattr(self, 'model_expected_channels', eeg_data.shape[1])
-                    X = eeg_data.reshape(1, time_dim, chan_dim)
-                    probs = self.tf_adapter.predict_proba(self.model, X)
-                    pred = int(np.argmax(probs, axis=1)[0])
-                    conf = float(probs[0][pred])
-                    left_prob = float(probs[0][0])
-                    right_prob = float(probs[0][1])
-                else:
-                    # fallback: call local inference subprocess via HTTP
-                    try:
-                        import requests
-                        url = f'http://127.0.0.1:{self.inference_port}/predict'
-                        payload = {'data': eeg_data.tolist()}
-                        resp = requests.post(url, json=payload, timeout=1.0)
-                        if resp.status_code == 200:
-                            probs = resp.json().get('probs')
-                            probs = np.array(probs)
-                            pred = int(np.argmax(probs, axis=1)[0]) if probs.ndim == 2 else int(np.argmax(probs[0]))
-                            conf = float(probs[0][pred]) if probs.ndim == 2 else float(probs[pred])
-                            left_prob = float(probs[0][0]) if probs.ndim == 2 else float(probs[0])
-                            right_prob = float(probs[0][1]) if probs.ndim == 2 else float(probs[1])
-                        else:
-                            print(f'Inference server error: {resp.status_code} {resp.text}')
-                            return
-                    except Exception as e:
-                        print(f'Error calling inference server: {e}')
-                        return
+            prediction = self.inference_controller.predict(eeg_data)
+            pred = int(prediction.predicted_index)
 
             # Atualizar interface
-            classes = ['🤚 Mão Esquerda', '✋ Mão Direita']
             timestamp = datetime.now()
-            
-            self.prediction_label.setText(classes[pred])
-            if classes[pred] == '🤚 Mão Esquerda':
-                self.prob_left_label.setText(f"Mão Esquerda: {left_prob:.1%}")
+            self._apply_prediction_display(prediction)
+            if pred == 0:
                 self.send_udp_signal('esquerda')  # Enviar sinal UDP
                 self.send_esp32_signal('esquerda')  # Enviar sinal Serial ESP32
             else:
-                self.prob_right_label.setText(f"Mão Direita: {right_prob:.1%}")
                 self.send_udp_signal('direita')  # Enviar sinal UDP 
                 self.send_esp32_signal('direita')  # Enviar sinal Serial ESP32 
 
@@ -1684,14 +1474,8 @@ class StreamingWidget(QWidget):
             except Exception:
                 pass
             
-            # Atualizar estilo baseado na predição
-            if pred == 0:  # Mão esquerda
-                self.prediction_label.setStyleSheet("font-size: 24px; font-weight: bold; color: #2196F3; padding: 10px;")
-            else:  # Mão direita
-                self.prediction_label.setStyleSheet("font-size: 24px; font-weight: bold; color: #FF9800; padding: 10px;")
-            
             # Salvar predição
-            self.predictions.append((timestamp, pred, conf))
+            self.predictions.append((timestamp, pred, float(prediction.confidence)))
             
         except Exception as e:
             print(f"Erro na predição: {e}")
@@ -1702,7 +1486,7 @@ class StreamingWidget(QWidget):
         self.plot_widget.add_data(data)
         
         # Adicionar ao buffer de dados e verificar predição
-        if self.game_mode:
+        if self._is_game_mode():
             # Garantir que temos 'channels' canais
             if len(data) >= self.channels:
                 eeg_data = data[:self.channels]
@@ -1740,34 +1524,33 @@ class StreamingWidget(QWidget):
     
     def on_connection_status(self, connected):
         """Callback para status da conexão - cores do HTML"""
-        GREEN = "#48bb78"
-        ORANGE = "#f6ad55"
-        WHITE = "#ffffff"
-        RED = "#fc8181"
         if connected:
-            if hasattr(self.streaming_thread, 'is_mock_mode') and self.streaming_thread.is_mock_mode:
-                self.status_eeg.setText("EEG - Simulação")
-                self.status_eeg.setStyleSheet(f"color: {ORANGE}; font-size: 14px; font-weight: 700;")
+            if self.eeg_stream_controller.is_mock_mode():
+                self.eeg_connection_phase = "mock"
             else:
-                self.status_eeg.setText("EEG - Conectado")
-                self.status_eeg.setStyleSheet(f"color: {GREEN}; font-size: 14px; font-weight: 700;")
-            self.record_btn.setEnabled(True)
+                self.eeg_connection_phase = "connected"
+            self.record_button_enabled = True
         else:
-            self.status_eeg.setText("EEG - Falha")
-            self.status_eeg.setStyleSheet(f"color: {RED}; font-size: 14px; font-weight: 700;")
-            self.record_btn.setEnabled(False)
+            self.eeg_connection_phase = (
+                "standby" if self.disconnection_in_progress else "failed"
+            )
+            self.record_button_enabled = False
+            self.disconnection_in_progress = False
 
-        self.connect_btn.setEnabled(True)
-        if connected:
-            self.connect_btn.setText("Desconectar")
-        else:
-            self.connect_btn.setText("Conectar")
+        self.connect_button_enabled = True
+        self._apply_connection_panel()
+        self._refresh_streaming_state()
+
+    def stop_streaming(self):
+        """Stops the EEG stream if it is running."""
+        self.eeg_stream_controller.disconnect()
     
     def update_session_timer(self):
         """Atualiza o display do timer de sessão"""
-        if self.session_start_time is not None:
+        started_at = self._get_session_started_at()
+        if started_at is not None:
             # Calcular tempo decorrido
-            elapsed = int(time.time() - self.session_start_time)
+            elapsed = int(time.time() - float(started_at))
         else:
             elapsed = 0
         
@@ -1791,16 +1574,11 @@ class StreamingWidget(QWidget):
 
         # Resetar contadores de ações sempre que mudar de tarefa
         self.reset_action_counters()
+        self._apply_task_view_state()
 
         if not self.is_recording:
             if task == "Jogo":
-                self.record_btn.setText("Iniciar Jogo")
-                self.status_table_group.setVisible(True)
-                self.game_group.setVisible(True)
-                self.stats_group.setVisible(True)
-                self.accuracy_group.setVisible(True)
-
-                if self.model is None:
+                if not self.inference_controller.has_loaded_model():
                     try:
                         candidates = self.find_tf_models()
                     except Exception:
@@ -1823,30 +1601,13 @@ class StreamingWidget(QWidget):
                         QMessageBox.warning(
                             self,
                             "Modelo não encontrado",
-                            "Nenhum modelo TensorFlow (.keras/.h5) foi encontrado em 'bci/models', 'files/' ou 'HardThinking/files'.\n"
-                            "Coloque um arquivo .keras em um desses diretórios ou treine um modelo via HardThinking."
+                            "Nenhum modelo TensorFlow (.keras/.h5) foi encontrado nos diretórios configurados.\n"
+                            "Coloque um arquivo .keras em um diretório de modelos conhecido ou treine um modelo pela interface."
                         )
-            else:
-                self.record_btn.setText("Iniciar Gravação")
-                self.status_table_group.setVisible(False)
-                self.game_group.setVisible(False)
-                self.stats_group.setVisible(False)
-                self.accuracy_group.setVisible(False)
     
     def update_record_button_text(self):
         """Atualiza o texto do botão de gravação baseado no estado e tarefa"""
-        task = self.task_combo.currentText()
-        
-        if self.is_recording:
-            if task == "Jogo":
-                self.record_btn.setText("Parar Jogo")
-            else:
-                self.record_btn.setText("Parar Gravação")
-        else:
-            if task == "Jogo":
-                self.record_btn.setText("Iniciar Jogo")
-            else:
-                self.record_btn.setText("Iniciar Gravação")
+        self._apply_task_view_state()
     
     def _on_unity_message(self, message: str):
         """Callback para mensagens recebidas do Unity"""
@@ -1857,7 +1618,6 @@ class StreamingWidget(QWidget):
             print(f"✅ Resposta recebida: {message}")
             if self.waiting_for_response:
                 self.waiting_for_response = False
-                self.response_received = True
                 print("🔓 Liberado para enviar próximo sinal aleatório")
                 # Aguardar 7 segundos antes do próximo sinal
                 QTimer.singleShot(7000, self.send_next_random_signal)
@@ -1874,102 +1634,35 @@ class StreamingWidget(QWidget):
     def _on_unity_connection(self, connected: bool):
         """Callback para mudanças no status de conexão com Unity"""
         if connected:
+            self.unity_connection_phase = "connected"
             print("[Unity] TCP conectado")
-            # Aqui você pode atualizar a UI para mostrar que o Unity está conectado
         else:
+            if not self.udp_server_active:
+                self.unity_connection_phase = "standby"
             print("[Unity] TCP desconectado")
-            # Aqui você pode atualizar a UI para mostrar que o Unity foi desconectado
+        self._apply_connection_panel()
+        self._refresh_streaming_state()
     
     def show_training_dialog(self, csv_file_path, patient_id, patient_name, auto_start: bool = False):
         """Mostra o diálogo de confirmação e execução do treino"""
         try:
-            # New API: auto_start to run training immediately and auto-load model when ready
-            dialog = TrainingDialog(csv_file_path, patient_id, patient_name, self)
-            # Propagar preferência para auto-start
-            dialog.auto_start = auto_start
-            # Conectar sinal de modelo pronto para carregar automaticamente
-            if hasattr(dialog, 'trainer_thread'):
-                pass
+            dialog = TrainingDialog(
+                self.training_controller,
+                csv_file_path,
+                int(patient_id),
+                patient_name,
+                auto_load_model=auto_start,
+                parent=self,
+            )
+            dialog.training_progress_signal.connect(self._on_training_progress)
+            dialog.training_finished_signal.connect(self._on_training_finished)
+            dialog.model_ready_signal.connect(self._on_trained_model_ready)
 
-            def _on_model_ready(path):
-                try:
-                    loaded = self.load_model_from_path(path)
-                    if loaded:
-                        QMessageBox.information(self, "Treino", f"Modelo treinado e carregado: {path}")
-                    else:
-                        QMessageBox.warning(self, "Treino", f"Modelo treinado, mas falha ao carregar: {path}")
-                except Exception as e:
-                    print(f"Erro ao carregar modelo treinado: {e}")
-
-            # If caller requested auto start, start training immediately and connect signals
-            # We inspect whether caller passed auto_start via attribute set on dialog (compatibility)
-            auto_start = getattr(dialog, 'auto_start', False)
             if auto_start:
-                # start training and connect signals so the UI shows progress and final status
+                self.recording_label.setText("Treinamento: iniciando...")
+                self.recording_label.setStyleSheet("color: orange; font-weight: bold;")
                 dialog.start_training()
-
-                # Connect model ready signal to loader
-                try:
-                    if dialog.trainer_thread and hasattr(dialog.trainer_thread, 'model_path_signal'):
-                        dialog.trainer_thread.model_path_signal.connect(_on_model_ready)
-                except Exception:
-                    pass
-
-                # Connect progress updates to the recording label so the user sees activity
-                try:
-                    if dialog.trainer_thread and hasattr(dialog.trainer_thread, 'progress_signal'):
-                        def _on_progress(msg):
-                            try:
-                                # Mostrar no label de gravação e no log do diálogo
-                                self.recording_label.setText(f"Treinamento: {msg}")
-                                self.recording_label.setStyleSheet("color: orange; font-weight: bold;")
-                                # também adicionar no log do diálogo
-                                try:
-                                    dialog.log_text.append(msg)
-                                except Exception:
-                                    pass
-                            except Exception:
-                                pass
-                        dialog.trainer_thread.progress_signal.connect(_on_progress)
-                except Exception:
-                    pass
-
-                # Conectar finished_signal para notificar usuário caso load falhe
-                try:
-                    if dialog.trainer_thread and hasattr(dialog.trainer_thread, 'finished_signal'):
-                        def _on_finished(success, message):
-                            try:
-                                if success:
-                                    QMessageBox.information(self, "Treinamento", message)
-                                else:
-                                    QMessageBox.critical(self, "Treinamento", message)
-                                # Restaurar texto do label
-                                self.recording_label.setText("Não gravando")
-                                self.recording_label.setStyleSheet("color: gray;")
-                            except Exception:
-                                pass
-                        dialog.trainer_thread.finished_signal.connect(_on_finished)
-                except Exception:
-                    pass
-
-                # Mostrar diálogo em primeiro plano e garantir foco
                 dialog.show()
-                # Garantir que o diálogo de progresso mostre o log e o status imediatamente
-                try:
-                    dialog.progress_label.setVisible(True)
-                    dialog.progress_bar.setVisible(True)
-                    dialog.log_text.setVisible(True)
-                    dialog.log_text.append("Iniciando treinamento automaticamente...")
-                except Exception:
-                    pass
-
-                # Atualizar label principal para indicar início do treinamento
-                try:
-                    self.recording_label.setText("Treinamento: iniciando...")
-                    self.recording_label.setStyleSheet("color: orange; font-weight: bold;")
-                    QMessageBox.information(self, "Treinamento", "Treinamento iniciado automaticamente.")
-                except Exception:
-                    pass
                 try:
                     dialog.raise_()
                     dialog.activateWindow()
@@ -1977,7 +1670,6 @@ class StreamingWidget(QWidget):
                     pass
                 return
 
-            # Fallback: interactive mode
             result = dialog.exec_()
             if result == QDialog.Accepted:
                 print(f"Iniciando treino para paciente {patient_name} com arquivo {csv_file_path}")
@@ -1987,3 +1679,25 @@ class StreamingWidget(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Erro", f"Erro ao abrir diálogo de treino: {e}")
             QMessageBox.information(self, "Sucesso", "Gravação de treino finalizada!")
+
+    def _on_training_progress(self, message: str):
+        self.recording_label.setText(f"Treinamento: {message}")
+        self.recording_label.setStyleSheet("color: orange; font-weight: bold;")
+
+    def _on_training_finished(self, success: bool, _message: str):
+        self._refresh_streaming_state()
+        self.recording_label.setText("Não gravando")
+        if success:
+            self.recording_label.setStyleSheet("color: gray;")
+        else:
+            self.recording_label.setStyleSheet("color: #f44336; font-weight: bold;")
+
+    def _on_trained_model_ready(self, model_path: str):
+        loaded_model = self.inference_controller.get_loaded_model()
+        if loaded_model is not None:
+            self._update_model_status(loaded_model)
+        else:
+            self._refresh_streaming_state()
+            self.model_status_label.setText(
+                f"Modelo treinado pronto: {os.path.basename(model_path)}"
+            )

@@ -6,29 +6,17 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QGridLayout, QLabel,
 from PyQt5.QtCore import QDate
 from PyQt5.QtGui import QFont
 from typing import Optional
-from brainbridge_v2.infrastructure.database.manager import DatabaseManager
-from brainbridge_v2.infrastructure.repositories.sqlite_patient_repository import SQLitePatientRepository
 from brainbridge_v2.interface_adapters.controllers.patient_controller import PatientController
 from brainbridge_v2.presentation.gui.styles import Theme
 
 class PatientRegistrationWidget(QWidget):
     """Widget para cadastro de pacientes"""
     
-    def __init__(self, db_manager: DatabaseManager, parent=None):
+    def __init__(self, patient_controller: PatientController, parent=None):
         super().__init__(parent)
-        self.db_manager = db_manager
-        self.patient_controller = self._create_patient_controller(db_manager)
+        self.patient_controller = patient_controller
         self.setup_ui()
         self.load_patients()
-
-    @staticmethod
-    def _create_patient_controller(db_manager: DatabaseManager) -> PatientController:
-        """
-        Composition root for this widget slice:
-        Presentation -> Interface Adapters -> Application -> Infrastructure.
-        """
-        repository = SQLitePatientRepository(db_manager)
-        return PatientController.from_repository(repository)
         
     def setup_ui(self):
         """Configura a interface - Formulário à esquerda, Tabela à direita"""

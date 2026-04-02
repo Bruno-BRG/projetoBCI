@@ -52,6 +52,7 @@ def run_gui():
     
     try:
         from PyQt5.QtWidgets import QApplication
+        from brainbridge_v2.bootstrap.container import build_app_container
         from brainbridge_v2.presentation.gui.main_window import MainWindow
         from brainbridge_v2.presentation.gui.styles import apply_theme
         
@@ -62,7 +63,8 @@ def run_gui():
         # Aplicar tema visual
         apply_theme(app)
         
-        window = MainWindow()
+        container = build_app_container()
+        window = MainWindow(container)
         window.show()
         
         return app.exec_()
