@@ -72,6 +72,37 @@ def test_collect_windowed_dataset_preserves_groups(monkeypatch):
     }
 
 
+def test_collect_windowed_dataset_filters_physionet_non_left_right_runs(monkeypatch):
+    seen_paths = []
+
+    def fake_load(path):
+        seen_paths.append(Path(path).name)
+        return np.ones((250, 16), dtype=np.float32), [""] * 250
+
+    def fake_windows(data, markers, **kwargs):
+        return np.ones((2, 4, 3), dtype=np.float32), np.array([0, 1], dtype=np.int32)
+
+    monkeypatch.setattr(trainer, "_load_openbci_csv", fake_load)
+    monkeypatch.setattr(trainer, "_create_windows_ht", fake_windows)
+
+    X, y, groups, summaries = trainer.load_generalized_windowed_dataset(
+        [
+            "root/S001/S001R03_csv_openbci.csv",
+            "root/S001/S001R05_csv_openbci.csv",
+            "root/S002/S002R04_csv_openbci.csv",
+            "root/S002/S002R06_csv_openbci.csv",
+        ],
+        window_size=4,
+        group_resolver=lambda path: Path(path).parent.name,
+    )
+
+    assert seen_paths == ["S001R03_csv_openbci.csv", "S002R04_csv_openbci.csv"]
+    assert X.shape == (4, 4, 3)
+    assert y.tolist() == [0, 1, 0, 1]
+    assert groups.tolist() == ["S001", "S001", "S002", "S002"]
+    assert [summary.group_id for summary in summaries] == ["S001", "S002"]
+
+
 def test_train_generalized_from_csvs_uses_group_holdout(monkeypatch):
     X = np.arange(16 * 4 * 3, dtype=np.float32).reshape(16, 4, 3)
     y = np.array([0, 1] * 8, dtype=np.int32)

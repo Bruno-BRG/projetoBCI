@@ -20,6 +20,7 @@ import time
 import re
 
 from .models import build_cnn_1d, load_keras_model
+from .physionet_eegmmidb_protocol import is_left_right_training_file
 from ..config.settings import MODELS_DIR
 from ..signal_processing.butter_filter import ButterworthFilter
 
@@ -220,6 +221,7 @@ def _collect_windowed_dataset(
     apply_filter: bool = True,
     band: Tuple[float, float] = (8.0, 30.0),
     group_resolver: Optional[Callable[[str], str]] = None,
+    left_right_only: bool = False,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[SubjectWindowSummary]]:
     all_X = []
     all_y = []
@@ -228,6 +230,8 @@ def _collect_windowed_dataset(
     resolver = group_resolver or _infer_group_id_from_path
 
     for path in csv_files:
+        if left_right_only and not is_left_right_training_file(path):
+            continue
         group_id = str(resolver(path))
         data, markers = _load_openbci_csv(Path(path))
         X, y = _create_windows_ht(
@@ -284,6 +288,7 @@ def load_generalized_windowed_dataset(
     window_size: int = 250,
     step: int = 125,
     group_resolver: Optional[Callable[[str], str]] = None,
+    left_right_only: bool = True,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[SubjectWindowSummary]]:
     """Carrega janelas rotuladas preservando o grupo/paciente de cada CSV.
 
@@ -294,6 +299,7 @@ def load_generalized_windowed_dataset(
         window_size=window_size,
         step=step,
         group_resolver=group_resolver,
+        left_right_only=left_right_only,
     )
 
 
@@ -428,6 +434,7 @@ def train_generalized_from_csvs(
     group_resolver: Optional[Callable[[str], str]] = None,
     model_builder: Optional[Callable[[Tuple[int, int], int], Any]] = None,
     validation_size: float = 0.2,
+    left_right_only: bool = True,
 ) -> GeneralizedTrainResult:
     """Treina modelo dev/generalizado com validação por grupo/paciente.
 
@@ -447,6 +454,7 @@ def train_generalized_from_csvs(
         window_size=window_size,
         step=step,
         group_resolver=group_resolver,
+        left_right_only=left_right_only,
     )
     if len(X) == 0:
         raise ValueError("Nenhuma janela válida encontrada nos CSVs fornecidos.")
@@ -614,7 +622,8 @@ class ModelTrainer:
                                     batch_size: int = 32,
                                     model_name: Optional[str] = None,
                                     group_resolver: Optional[Callable[[str], str]] = None,
-                                    validation_size: float = 0.2) -> GeneralizedTrainResult:
+                                    validation_size: float = 0.2,
+                                    left_right_only: bool = True) -> GeneralizedTrainResult:
         """Treino dev/generalizado com validação por grupo/paciente."""
         return train_generalized_from_csvs(
             csv_files=csv_files,
@@ -625,6 +634,7 @@ class ModelTrainer:
             model_name=model_name,
             group_resolver=group_resolver,
             validation_size=validation_size,
+            left_right_only=left_right_only,
         )
 
     def train_generalized_from_directory(self,
@@ -635,7 +645,8 @@ class ModelTrainer:
                                          epochs: int = 30,
                                          batch_size: int = 32,
                                          model_name: Optional[str] = None,
-                                         validation_size: float = 0.2) -> GeneralizedTrainResult:
+                                         validation_size: float = 0.2,
+                                         left_right_only: bool = True) -> GeneralizedTrainResult:
         """Treino dev/generalizado buscando CSVs recursivamente por diretório."""
         dir_path = Path(directory)
         csvs = [str(p) for p in dir_path.rglob(pattern) if p.is_file()]
@@ -649,4 +660,5 @@ class ModelTrainer:
             batch_size=batch_size,
             model_name=model_name,
             validation_size=validation_size,
+            left_right_only=left_right_only,
         )
