@@ -40,5 +40,24 @@ def test_tensorflow_inference_gateway_adapter_loads_model_and_predicts():
     assert model.expected_channels == 2
     assert gateway.get_loaded_model() is not None
     assert created_adapters[0].predicted_batches[0].shape == (1, 3, 2)
+    assert created_adapters[0].predicted_batches[1].shape == (1, 3, 2)
     assert result.predicted_index == 1
     assert result.right_probability == 0.75
+
+
+def test_tensorflow_inference_gateway_adapter_can_skip_warmup():
+    created_adapters = []
+
+    def build_adapter():
+        adapter = FakeTensorFlowAdapter()
+        created_adapters.append(adapter)
+        return adapter
+
+    gateway = TensorFlowInferenceGatewayAdapter(
+        adapter_factory=build_adapter,
+        warmup_enabled=False,
+    )
+
+    gateway.load_model("C:/models/test.keras")
+
+    assert created_adapters[0].predicted_batches == []

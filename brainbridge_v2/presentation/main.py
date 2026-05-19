@@ -17,22 +17,19 @@ from pathlib import Path
 
 current_dir = Path(__file__).resolve().parent
 package_root = current_dir.parent
+repo_root = package_root.parent
+if str(repo_root) not in sys.path:
+    sys.path.insert(0, str(repo_root))
 
 # Use local writable config/cache for matplotlib in restricted Windows environments.
-mpl_config_dir = package_root.parent / ".mplconfig"
+mpl_config_dir = repo_root / ".mplconfig"
 mpl_config_dir.mkdir(parents=True, exist_ok=True)
 os.environ.setdefault("MPLCONFIGDIR", str(mpl_config_dir))
 
-# 1) Inicializar TensorFlow primeiro (preferência do sistema)
+# 1) Configurar TensorFlow para quando ele for carregado sob demanda.
 os.environ.setdefault('TF_CPP_MIN_LOG_LEVEL', '2')  # reduzir logs do TF
-try:
-    import tensorflow as tf  # noqa: F401
-    HAS_ML = True
-    # print("TensorFlow inicializado com sucesso")  # opcional
-except Exception as e:
-    # Captura falhas de DLL também e segue sem travar o app
-    print("Aviso: TensorFlow não encontrado ou falhou ao inicializar (DLL). Treinamento desativado.")
-    HAS_ML = False
+os.environ.setdefault('TF_ENABLE_ONEDNN_OPTS', '0')
+HAS_ML = None
 
 # 2) Verificar dependências de GUI depois do TF
 try:
@@ -96,8 +93,8 @@ def check_environment():
         try:
             __import__(module)
             print(f"✓ {name}: Instalado")
-        except ImportError:
-            print(f"✗ {name}: Não instalado")
+        except Exception as exc:
+            print(f"✗ {name}: Não instalado ou falhou ao inicializar ({exc})")
     
     # Verificar estrutura de diretórios
     print("\n=== Estrutura de Diretórios ===")

@@ -8,6 +8,7 @@ import numpy as np
 
 from brainbridge_v2.domain.entities.model_metadata import ModelMetadata
 from brainbridge_v2.domain.entities.prediction_result import PredictionResult
+from brainbridge_v2.application.runtime_config import DEFAULT_RUNTIME_CONFIG
 from brainbridge_v2.infrastructure.ml.tensorflow_adapter import TensorFlowMLAdapter
 
 
@@ -19,10 +20,13 @@ class TensorFlowInferenceGatewayAdapter:
     def __init__(
         self,
         adapter_factory: Optional[Callable[[], TensorFlowMLAdapter]] = None,
+        *,
+        warmup_enabled: bool = DEFAULT_RUNTIME_CONFIG.tensorflow_warmup_enabled,
     ):
         self._adapter_factory = adapter_factory or (
             lambda: TensorFlowMLAdapter(config={})
         )
+        self._warmup_enabled = bool(warmup_enabled)
         self._adapter: Optional[TensorFlowMLAdapter] = None
         self._loaded_model: Optional[ModelMetadata] = None
 
@@ -33,6 +37,8 @@ class TensorFlowInferenceGatewayAdapter:
         self._adapter = adapter
         self._loaded_model = self._build_model_metadata(model_path, model)
         self._loaded_model.validate()
+        if self._warmup_enabled:
+            self._warmup_model()
         return self._loaded_model
 
     def get_loaded_model(self) -> Optional[ModelMetadata]:
@@ -86,6 +92,16 @@ class TensorFlowInferenceGatewayAdapter:
             expected_time_steps=expected_time_steps,
             expected_channels=expected_channels,
         )
+
+    def _warmup_model(self) -> None:
+        if self._adapter is None or self._loaded_model is None:
+            return
+        time_steps = self._loaded_model.expected_time_steps
+        channels = self._loaded_model.expected_channels
+        if time_steps is None or channels is None:
+            return
+        dummy_batch = np.zeros((1, int(time_steps), int(channels)), dtype="float32")
+        self._adapter.predict(dummy_batch)
 
     @staticmethod
     def _extract_input_shape(model: object) -> Optional[Tuple[Optional[int], ...]]:

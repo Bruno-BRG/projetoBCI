@@ -16,4 +16,4 @@ scikit-learn>=1.0.0
 # Visualization
 matplotlib>=3.7.1
 seaborn>=0.11.0
-zmq
+pyzmq>=25.1.0

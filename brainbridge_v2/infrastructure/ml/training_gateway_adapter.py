@@ -24,6 +24,37 @@ class ModelTrainingGatewayAdapter:
         self._models_dir = models_dir or MODELS_DIR
         self._models_dir.mkdir(parents=True, exist_ok=True)
 
+    def _patient_model_path(self, patient_id: int) -> Path:
+        return self._models_dir / f"patient_{patient_id}.keras"
+
+    def _latest_base_model_path(self) -> Optional[Path]:
+        candidates = [
+            path
+            for path in self._models_dir.glob("*.keras")
+            if path.is_file() and not path.name.startswith("patient_")
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda path: path.stat().st_mtime)
+
+    def _select_training_base_model(
+        self,
+        patient_id: int,
+        emit: Callable[[str], None],
+    ) -> Optional[Path]:
+        patient_model = self._patient_model_path(patient_id)
+        if patient_model.exists():
+            emit(f"Continuando treino do modelo do paciente: {patient_model.name}")
+            return patient_model
+
+        base_model = self._latest_base_model_path()
+        if base_model is not None:
+            emit(f"Iniciando a partir do modelo base: {base_model.name}")
+            return base_model
+
+        emit("Nenhum modelo base encontrado. Treinando modelo novo.")
+        return None
+
     def train(
         self,
         csv_file_path: str,
@@ -46,9 +77,11 @@ class ModelTrainingGatewayAdapter:
 
         if use_real_training:
             emit("Iniciando treinamento real (Keras)...")
+            base_model_path = self._select_training_base_model(patient_id, emit)
             result = self._trainer_module.train_from_csvs(
                 [str(csv_path)],
                 model_name=f"patient_{patient_id}",
+                base_model_path=str(base_model_path) if base_model_path else None,
             )
             emit("Modelo salvo com sucesso.")
             training_result = TrainingResult(

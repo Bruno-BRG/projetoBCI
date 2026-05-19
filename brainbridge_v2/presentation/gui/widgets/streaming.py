@@ -10,6 +10,13 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                            QMessageBox, QCheckBox,
                            QLineEdit, QSpinBox, QDialog, QInputDialog)
 from PyQt5.QtCore import pyqtSignal, QTimer, Qt
+from brainbridge_v2.application.game_inference_coordinator import (
+    GameInferenceCoordinator,
+)
+from brainbridge_v2.application.eeg_quality import EEGWindowQualityValidator
+from brainbridge_v2.application.pipeline_telemetry import PipelineTelemetry
+from brainbridge_v2.application.runtime_config import DEFAULT_RUNTIME_CONFIG
+from brainbridge_v2.application.unity_command_mapper import UnityCommandMapper
 from brainbridge_v2.infrastructure.config.settings import get_recording_path
 from brainbridge_v2.interface_adapters.controllers.eeg_stream_controller import (
     EEGStreamController,
@@ -65,6 +72,41 @@ try:
 except Exception:
     USE_OPENBCI_LOGGER = False
 
+
+class DeveloperSettingsDialog(QDialog):
+    def __init__(self, *, telemetry_enabled: bool, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Modo Desenvolvedor")
+        self.setModal(True)
+        self.resize(360, 140)
+        layout = QVBoxLayout()
+
+        title = QLabel("Configurações de Desenvolvimento")
+        title.setStyleSheet("font-size: 15px; font-weight: bold;")
+        layout.addWidget(title)
+
+        self.telemetry_checkbox = QCheckBox("Ativar telemetria da IA")
+        self.telemetry_checkbox.setChecked(bool(telemetry_enabled))
+        layout.addWidget(self.telemetry_checkbox)
+
+        buttons = QHBoxLayout()
+        cancel_btn = QPushButton("Cancelar")
+        cancel_btn.clicked.connect(self.reject)
+        apply_btn = QPushButton("Aplicar")
+        apply_btn.setStyleSheet(
+            "background-color: #3b5bdb; color: white; font-weight: bold; padding: 6px;"
+        )
+        apply_btn.clicked.connect(self.accept)
+        buttons.addStretch()
+        buttons.addWidget(cancel_btn)
+        buttons.addWidget(apply_btn)
+        layout.addLayout(buttons)
+        self.setLayout(layout)
+
+    def telemetry_enabled(self) -> bool:
+        return self.telemetry_checkbox.isChecked()
+
+
 class StreamingWidget(QWidget):
     """Widget para streaming e gravação de dados"""
     
@@ -113,12 +155,10 @@ class StreamingWidget(QWidget):
         self.session_timer.timeout.connect(self.update_session_timer)
         self.session_elapsed_seconds = 0
 
-        self.setup_ui()
-
     # Configuracao base do modelo
-        self.channels = 16
         # Force canonical window_size to 250 (HardThinking canonical)
-        self.window_size = 250  # 2s @ 125Hz
+        self.window_size = DEFAULT_RUNTIME_CONFIG.window_size  # 2s @ 125Hz
+        self.channels = DEFAULT_RUNTIME_CONFIG.channels
         try:
             # HardThinking config module was added to sys.path earlier when locating adapter
             _ht_cfg_mod = importlib.import_module('config')
@@ -131,12 +171,7 @@ class StreamingWidget(QWidget):
             # keep fallbacks
             pass
 
-        self.samples_since_last_prediction = 0
         self.predictions = deque(maxlen=50)  # Últimas predições
-        # Buffer should hold several windows worth of samples; keep a generous maxlen
-        self.eeg_buffer = deque(maxlen=max(1000, self.window_size * 4))  # Buffer para dados EEG
-        # Lock to ensure only the first prediction in an AI window is used
-        self.prediction_locked = False
 
     # Estados do servidor UDP
         self.udp_server_active = False
@@ -160,9 +195,23 @@ class StreamingWidget(QWidget):
         self.ai_prediction_enabled = False
         self.task_start_time = None
         # Reduce default AI window to 2 seconds to send triggers sooner (milliseconds)
-        self.ai_window_duration = 2000  # 2 segundos em ms
+        self.ai_window_duration = DEFAULT_RUNTIME_CONFIG.ai_window_duration_ms
+        self.game_inference = GameInferenceCoordinator(
+            window_size=self.window_size,
+            channels=self.channels,
+            window_duration_ms=self.ai_window_duration,
+        )
+        self.developer_mode_enabled = False
+        self.pipeline_telemetry = PipelineTelemetry(enabled=False)
+        self.eeg_quality_validator = EEGWindowQualityValidator(
+            max_abs_amplitude=DEFAULT_RUNTIME_CONFIG.eeg_max_abs_amplitude,
+            min_channel_std=DEFAULT_RUNTIME_CONFIG.eeg_min_channel_std,
+        )
+        self.eeg_buffer = self.game_inference.eeg_buffer
+        self.samples_since_last_prediction = self.game_inference.samples_since_window_start
+        self.prediction_locked = self.game_inference.prediction_locked
         # Fallback interval for automatic game actions (was 30s); reduce to 10s
-        self.game_action_interval = 10000  # 10 segundos in ms
+        self.game_action_interval = DEFAULT_RUNTIME_CONFIG.game_action_interval_ms
 
     # Variáveis para cálculo de acurácia
         self.accuracy_trials: List[AccuracyTrialViewModel] = []
@@ -191,6 +240,7 @@ class StreamingWidget(QWidget):
             model_loaded=False,
             model_name=None,
         )
+        self.setup_ui()
         self._refresh_streaming_state()
 
     def _get_current_session(self):
@@ -229,6 +279,46 @@ class StreamingWidget(QWidget):
 
     def _is_game_mode(self) -> bool:
         return self.streaming_state.game_mode
+
+    def _sync_ai_prediction_state(self):
+        self.eeg_buffer = self.game_inference.eeg_buffer
+        self.samples_since_last_prediction = (
+            self.game_inference.samples_since_window_start
+        )
+        self.ai_prediction_enabled = self.game_inference.is_window_open
+        self.prediction_locked = self.game_inference.prediction_locked
+        self.task_start_time = self.game_inference.window_started_at_ms
+
+    def _reset_ai_prediction_window(self):
+        self.game_inference.reset()
+        self._sync_ai_prediction_state()
+
+    def _record_pipeline_event(self, name: str, **details):
+        try:
+            self.pipeline_telemetry.record(name, **details)
+        except Exception as exc:
+            print(f"[PIPELINE] Falha ao registrar evento {name}: {exc}")
+
+    def open_developer_settings(self):
+        dialog = DeveloperSettingsDialog(
+            telemetry_enabled=self.developer_mode_enabled,
+            parent=self,
+        )
+        if dialog.exec_() == QDialog.Accepted:
+            self.set_developer_mode(dialog.telemetry_enabled())
+
+    def set_developer_mode(self, enabled: bool):
+        self.developer_mode_enabled = bool(enabled)
+        self.pipeline_telemetry.set_enabled(self.developer_mode_enabled)
+        if hasattr(self, "developer_settings_btn"):
+            label = "Dev: On" if self.developer_mode_enabled else "Dev: Off"
+            self.developer_settings_btn.setText(label)
+            color = "#805ad5" if self.developer_mode_enabled else "#4a5568"
+            self.developer_settings_btn.setStyleSheet(
+                "padding: 5px 12px; font-size: 12px; font-weight: 700; "
+                f"background: {color}; color: #ffffff; border: 1px solid #718096; "
+                "border-radius: 5px;"
+            )
         
     def setup_ui(self):
         """Configura a interface pixel-perfect conforme bci_system.html"""
@@ -336,6 +426,11 @@ class StreamingWidget(QWidget):
         self.connect_btn.setStyleSheet(f"padding: 6px 15px; font-size: 13px; font-weight: 600; background: #38a169; color: {WHITE}; border: 1px solid #2f855a; border-radius: 5px;")
         self.connect_btn.clicked.connect(self.toggle_connection)
         col_center.addWidget(self.connect_btn, 0, Qt.AlignLeft)
+
+        self.developer_settings_btn = QPushButton("Dev: Off")
+        self.developer_settings_btn.setStyleSheet(f"padding: 5px 12px; font-size: 12px; font-weight: 700; background: #4a5568; color: {WHITE}; border: 1px solid #718096; border-radius: 5px;")
+        self.developer_settings_btn.clicked.connect(self.open_developer_settings)
+        col_center.addWidget(self.developer_settings_btn, 0, Qt.AlignLeft)
 
         # .status-list { flex-direction column; gap 3px; margin-top 4px }
         # .status-item { font-size: 14px; font-weight: 700 }
@@ -918,8 +1013,7 @@ class StreamingWidget(QWidget):
                         return
                 # Limpar variáveis do jogo
                 self.predictions.clear()
-                self.eeg_buffer.clear()
-                self.samples_since_last_prediction = 0
+                self._reset_ai_prediction_window()
                 self._apply_prediction_display()
                 self._apply_game_stats()
                 
@@ -928,10 +1022,6 @@ class StreamingWidget(QWidget):
                 
                 # Resetar controle de resposta
                 self.waiting_for_response = False
-                
-                # Resetar controle de IA
-                self.ai_prediction_enabled = False
-                self.task_start_time = None
                 
                 # Resetar status visual da IA
                 self._set_ai_status("waiting_task")
@@ -1061,8 +1151,7 @@ class StreamingWidget(QWidget):
             self.waiting_for_response = False
             
             # Resetar controle de IA
-            self.ai_prediction_enabled = False
-            self.task_start_time = None
+            self._reset_ai_prediction_window()
             
             # Resetar status visual da IA
             self._set_ai_status("stopped")
@@ -1155,21 +1244,15 @@ class StreamingWidget(QWidget):
             
             # Marcar que está aguardando resposta
             self.waiting_for_response = True
-            
-            # Abrir janela de IA por 5 segundos (fallback)
-            self.ai_prediction_enabled = True
-            # allow the first prediction in this new AI window
-            self.prediction_locked = False
-            self.task_start_time = time.time() * 1000  # timestamp em ms
-            print(f"🤖 Janela de IA aberta por {self.ai_window_duration/1000}s (fallback)")
-            
-            # Atualizar status visual
-            self._set_ai_status("active_fallback")
-            
-            # Fechar automaticamente a janela após 5 segundos
-            QTimer.singleShot(self.ai_window_duration, self.close_ai_window)
-            
+
             self.add_marker(action)
+            self._record_pipeline_event(
+                "TASK_SENT",
+                marker=action,
+                source="fallback",
+                window_size=self.window_size,
+            )
+            self._start_ai_prediction_window("active_fallback", source="fallback")
 
     def send_next_random_signal(self):
         """Envia o próximo sinal aleatório após receber resposta"""
@@ -1181,25 +1264,46 @@ class StreamingWidget(QWidget):
             
             # Marcar que está aguardando resposta
             self.waiting_for_response = True
-            
-            # Abrir janela de IA por 5 segundos
-            self.ai_prediction_enabled = True
-            # allow the first prediction in this new AI window
-            self.prediction_locked = False
-            self.task_start_time = time.time() * 1000  # timestamp em ms
-            print(f"🤖 Janela de IA aberta por {self.ai_window_duration/1000}s")
-            
-            # Atualizar status visual
-            self._set_ai_status("active_window")
-            
-            # Fechar automaticamente a janela após 5 segundos
-            QTimer.singleShot(self.ai_window_duration, self.close_ai_window)
-            
+
             self.add_marker(action)
+            self._record_pipeline_event(
+                "TASK_SENT",
+                marker=action,
+                source="random",
+                window_size=self.window_size,
+            )
+            self._start_ai_prediction_window("active_window")
+
+    def _start_ai_prediction_window(self, status: str, source: str = ""):
+        """
+        Abre a janela de inferencia zerando qualquer amostra anterior ao sinal.
+
+        A predicao so pode acontecer depois que window_size amostras novas
+        chegarem a partir do marcador enviado para Unity em add_marker().
+        """
+        self.game_inference.start_window(started_at_ms=time.time() * 1000)
+        self._sync_ai_prediction_state()
+        self._record_pipeline_event(
+            "AI_WINDOW_OPENED",
+            duration_ms=self.ai_window_duration,
+            window_size=self.window_size,
+            source=source or "random",
+        )
+
+        suffix = f" ({source})" if source else ""
+        print(f"🤖 Janela de IA aberta por {self.ai_window_duration/1000}s{suffix}")
+
+        self._set_ai_status(status)
+        QTimer.singleShot(self.ai_window_duration, self.close_ai_window)
 
     def close_ai_window(self):
-        """Fecha a janela de IA após 5 segundos"""
-        self.ai_prediction_enabled = False
+        """Fecha a janela de IA após o tempo configurado."""
+        self.game_inference.close_window()
+        self._sync_ai_prediction_state()
+        self._record_pipeline_event(
+            "AI_WINDOW_CLOSED",
+            samples_collected=self.samples_since_last_prediction,
+        )
         print("🚫 Janela de IA fechada automaticamente")
         
         # Atualizar status visual
@@ -1438,41 +1542,36 @@ class StreamingWidget(QWidget):
         """Faz predição do movimento com o modelo CNN"""
         if not self._is_game_mode() or not self.inference_controller.has_loaded_model():
             return
-        # If already used a prediction in this window, ignore further predictions
-        if getattr(self, 'prediction_locked', False):
+        if not self.game_inference.is_window_open or self.game_inference.prediction_locked:
             return
-        
-        # Verificar se a IA pode fazer previsões (janela de 5 segundos)
-        if not self.ai_prediction_enabled:
-            return
-            
-        # Verificar se ainda está dentro da janela de tempo permitida
-        if self.task_start_time is not None:
-            elapsed_time = time.time() * 1000 - self.task_start_time  # em ms
-            if elapsed_time > self.ai_window_duration:
-                self.close_ai_window()
-                print(f"🚫 Janela de IA fechada após {self.ai_window_duration/1000}s")
-                return
             
         try:
+            inference_start = time.perf_counter()
             prediction = self.inference_controller.predict(eeg_data)
+            inference_latency_ms = (time.perf_counter() - inference_start) * 1000
             pred = int(prediction.predicted_index)
+            runtime_action = UnityCommandMapper.from_prediction(pred)
 
             # Atualizar interface
             timestamp = datetime.now()
             self._apply_prediction_display(prediction)
-            if pred == 0:
-                self.send_udp_signal('esquerda')  # Enviar sinal UDP
-                self.send_esp32_signal('esquerda')  # Enviar sinal Serial ESP32
-            else:
-                self.send_udp_signal('direita')  # Enviar sinal UDP 
-                self.send_esp32_signal('direita')  # Enviar sinal Serial ESP32 
+            unity_success = self.send_udp_signal(runtime_action.direction)
+            self.send_esp32_signal(runtime_action.direction)
 
-            # lock to prevent further predictions in this AI window until Unity replies
-            try:
-                self.prediction_locked = True
-            except Exception:
-                pass
+            self.game_inference.mark_prediction_used()
+            self._sync_ai_prediction_state()
+            self._record_pipeline_event(
+                "PREDICTION_DONE",
+                predicted_index=pred,
+                confidence=float(prediction.confidence),
+                latency_ms=round(inference_latency_ms, 2),
+                samples=self.window_size,
+            )
+            self._record_pipeline_event(
+                "UNITY_COMMAND_SENT",
+                direction=runtime_action.direction,
+                success=bool(unity_success),
+            )
             
             # Salvar predição
             self.predictions.append((timestamp, pred, float(prediction.confidence)))
@@ -1484,22 +1583,60 @@ class StreamingWidget(QWidget):
         """Callback para dados recebidos"""
         # Enviar para plot
         self.plot_widget.add_data(data)
+        current_time_seconds = time.time()
+        current_time_ms = current_time_seconds * 1000
+        try:
+            self.pipeline_telemetry.observe_eeg_sample(
+                now_seconds=current_time_seconds,
+            )
+        except Exception as exc:
+            print(f"[PIPELINE] Falha ao medir taxa EEG: {exc}")
         
         # Adicionar ao buffer de dados e verificar predição
         if self._is_game_mode():
-            # Garantir que temos 'channels' canais
-            if len(data) >= self.channels:
-                eeg_data = data[:self.channels]
-            else:
-                eeg_data = data + [0.0] * (self.channels - len(data))
-            self.eeg_buffer.append(eeg_data)
-            self.samples_since_last_prediction += 1
-            
-            # Fazer predição a cada 250 amostras
-            if len(self.eeg_buffer) >= self.window_size and self.samples_since_last_prediction >= self.window_size:
-                window_data = list(self.eeg_buffer)[-self.window_size:]
-                self.predict_movement(np.array(window_data))
-                self.samples_since_last_prediction = 0
+            sample_result = self.game_inference.add_sample(
+                data,
+                now_ms=current_time_ms,
+            )
+            self._sync_ai_prediction_state()
+
+            if sample_result.status == GameInferenceCoordinator.STATUS_EXPIRED:
+                self._record_pipeline_event(
+                    "AI_WINDOW_EXPIRED",
+                    samples_collected=sample_result.samples_collected,
+                    duration_ms=self.ai_window_duration,
+                )
+                print(f"🚫 Janela de IA fechada após {self.ai_window_duration/1000}s")
+                self.close_ai_window()
+            elif sample_result.status == GameInferenceCoordinator.STATUS_READY:
+                elapsed_ms = None
+                if self.task_start_time is not None:
+                    elapsed_ms = round(current_time_ms - self.task_start_time, 2)
+                self._record_pipeline_event(
+                    "SAMPLE_250_READY",
+                    samples=self.window_size,
+                    elapsed_ms=elapsed_ms,
+                    eeg_rate_hz=round(
+                        self.pipeline_telemetry.sample_rate.latest_rate_hz,
+                        2,
+                    ),
+                )
+                quality_result = self.eeg_quality_validator.validate(
+                    sample_result.window
+                )
+                if quality_result.accepted:
+                    self.predict_movement(np.array(sample_result.window))
+                else:
+                    self._record_pipeline_event(
+                        "WINDOW_REJECTED",
+                        reason=quality_result.reason,
+                        samples=self.window_size,
+                    )
+                    print(
+                        f"Janela EEG rejeitada antes da IA: {quality_result.reason}"
+                    )
+                    self.game_inference.mark_prediction_used()
+                    self._sync_ai_prediction_state()
                 
         # Enviar para logger se estiver gravando
         if self.is_recording and self.csv_logger:
@@ -1616,6 +1753,11 @@ class StreamingWidget(QWidget):
         # Verificar se recebeu resposta CORRECT ou WRONG
         if "CORRECT" in message or "WRONG" in message:
             print(f"✅ Resposta recebida: {message}")
+            self._record_pipeline_event(
+                "UNITY_RESPONSE",
+                message=message,
+                waiting_for_response=bool(self.waiting_for_response),
+            )
             if self.waiting_for_response:
                 self.waiting_for_response = False
                 print("🔓 Liberado para enviar próximo sinal aleatório")
