@@ -8,6 +8,8 @@ dist/
 build/
 *.egg-info/
 *.egg
+Output/
+.mplconfig/
 
 # Virtual environments
 venv/
