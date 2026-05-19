@@ -139,7 +139,14 @@ class ConnectionPanelViewModel:
     vr: LabelStateViewModel
     orthosis: LabelStateViewModel
     connect_button_text: str
+    connect_button_style: str
     connect_button_enabled: bool
+    eeg_button_text: str
+    eeg_button_style: str
+    vr_button_text: str
+    vr_button_style: str
+    orthosis_button_text: str
+    orthosis_button_style: str
     record_button_enabled: bool
 
 
@@ -372,19 +379,47 @@ class ConnectionStatusPresenter:
         record_button_enabled: bool,
     ) -> ConnectionPanelViewModel:
         eeg_state = cls._present_device("eeg", eeg_phase)
+        all_active = eeg_phase in {"connecting", "connected", "mock"}
         return ConnectionPanelViewModel(
             eeg=eeg_state,
             vr=cls._present_device("vr", vr_phase),
             orthosis=cls._present_device("orthosis", orthosis_phase),
             connect_button_text=(
+                "Desconectar Tudo"
+                if all_active
+                else "Conectar Tudo"
+            ),
+            connect_button_style=cls._present_button_style(all_active, large=True),
+            connect_button_enabled=connect_button_enabled,
+            eeg_button_text=(
                 "Desconectar"
-                if eeg_phase in {"connecting", "connected", "mock"}
+                if all_active
                 else "Conectar"
             ),
-            connect_button_enabled=connect_button_enabled,
+            eeg_button_style=cls._present_button_style(all_active),
+            vr_button_text=(
+                "Desconectar"
+                if vr_phase in {"connecting", "connected"}
+                else "Conectar"
+            ),
+            vr_button_style=cls._present_button_style(vr_phase in {"connecting", "connected"}),
+            orthosis_button_text=(
+                "Desconectar"
+                if orthosis_phase in {"connecting", "connected"}
+                else "Conectar"
+            ),
+            orthosis_button_style=cls._present_button_style(orthosis_phase in {"connecting", "connected"}),
             record_button_enabled=record_button_enabled
             and eeg_phase in {"connected", "mock"},
         )
+
+    @classmethod
+    def _present_button_style(cls, active: bool, large: bool = False) -> str:
+        color = "#e53e3e" if active else "#38a169"
+        border = "#c53030" if active else "#2f855a"
+        padding = "6px 15px" if large else "4px 10px"
+        font_size = "13px" if large else "11px"
+        return f"padding: {padding}; font-size: {font_size}; font-weight: 600; background: {color}; color: #ffffff; border: 1px solid {border}; border-radius: 5px;"
 
     @classmethod
     def _present_device(cls, device: str, phase: str) -> LabelStateViewModel:

@@ -77,7 +77,10 @@ def test_connection_status_presenter_maps_phases_to_visible_labels():
     assert panel.eeg.text == "EEG - Simulação"
     assert panel.vr.text == "VR - Conectado"
     assert panel.orthosis.text == "ORTESE - Falha"
-    assert panel.connect_button_text == "Desconectar"
+    assert panel.connect_button_text == "Desconectar Tudo"
+    assert panel.eeg_button_text == "Desconectar"
+    assert panel.vr_button_text == "Desconectar"
+    assert panel.orthosis_button_text == "Conectar"
     assert panel.connect_button_enabled is False
     assert panel.record_button_enabled is True
 

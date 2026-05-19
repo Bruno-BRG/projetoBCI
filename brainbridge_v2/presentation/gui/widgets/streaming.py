@@ -434,19 +434,36 @@ class StreamingWidget(QWidget):
 
         # .status-list { flex-direction column; gap 3px; margin-top 4px }
         # .status-item { font-size: 14px; font-weight: 700 }
-        status_list = QVBoxLayout()
-        status_list.setSpacing(3)
-        status_list.setContentsMargins(0, 4, 0, 0)
+        status_grid = QGridLayout()
+        status_grid.setSpacing(8)
+        status_grid.setContentsMargins(0, 4, 0, 0)
+        
         self.status_eeg = QLabel("EEG - Standby")
         self.status_eeg.setStyleSheet(f"color: {WHITE}; font-size: 14px; font-weight: 700;")
+        self.connect_eeg_btn = QPushButton("Conectar")
+        self.connect_eeg_btn.setStyleSheet(f"padding: 4px 10px; font-size: 11px; font-weight: 600; background: #38a169; color: {WHITE}; border: 1px solid #2f855a; border-radius: 4px;")
+        self.connect_eeg_btn.clicked.connect(self.toggle_eeg_connection)
+        
         self.status_vr = QLabel("VR - Standby")
         self.status_vr.setStyleSheet(f"color: {WHITE}; font-size: 14px; font-weight: 700;")
+        self.connect_vr_btn = QPushButton("Conectar")
+        self.connect_vr_btn.setStyleSheet(f"padding: 4px 10px; font-size: 11px; font-weight: 600; background: #38a169; color: {WHITE}; border: 1px solid #2f855a; border-radius: 4px;")
+        self.connect_vr_btn.clicked.connect(self.toggle_udp_server)
+        
         self.status_ortese = QLabel("ORTESE - Standby")
         self.status_ortese.setStyleSheet(f"color: {WHITE}; font-size: 14px; font-weight: 700;")
-        status_list.addWidget(self.status_eeg)
-        status_list.addWidget(self.status_vr)
-        status_list.addWidget(self.status_ortese)
-        col_center.addLayout(status_list)
+        self.connect_ortese_btn = QPushButton("Conectar")
+        self.connect_ortese_btn.setStyleSheet(f"padding: 4px 10px; font-size: 11px; font-weight: 600; background: #38a169; color: {WHITE}; border: 1px solid #2f855a; border-radius: 4px;")
+        self.connect_ortese_btn.clicked.connect(self.toggle_esp32_connection)
+        
+        status_grid.addWidget(self.status_eeg, 0, 0)
+        status_grid.addWidget(self.connect_eeg_btn, 0, 1)
+        status_grid.addWidget(self.status_vr, 1, 0)
+        status_grid.addWidget(self.connect_vr_btn, 1, 1)
+        status_grid.addWidget(self.status_ortese, 2, 0)
+        status_grid.addWidget(self.connect_ortese_btn, 2, 1)
+        
+        col_center.addLayout(status_grid)
         col_center.addStretch()
         top_layout.addLayout(col_center, 1)
 
@@ -734,7 +751,23 @@ class StreamingWidget(QWidget):
             panel.orthosis.style_sheet,
         )
         self.connect_btn.setText(panel.connect_button_text)
+        self.connect_btn.setStyleSheet(panel.connect_button_style)
         self.connect_btn.setEnabled(panel.connect_button_enabled)
+        
+        # Atualizar botões individuais
+        if hasattr(self, 'connect_eeg_btn'):
+            self.connect_eeg_btn.setText(panel.eeg_button_text)
+            self.connect_eeg_btn.setStyleSheet(panel.eeg_button_style)
+            self.connect_eeg_btn.setEnabled(panel.connect_button_enabled)
+        if hasattr(self, 'connect_vr_btn'):
+            self.connect_vr_btn.setText(panel.vr_button_text)
+            self.connect_vr_btn.setStyleSheet(panel.vr_button_style)
+            self.connect_vr_btn.setEnabled(panel.connect_button_enabled)
+        if hasattr(self, 'connect_ortese_btn'):
+            self.connect_ortese_btn.setText(panel.orthosis_button_text)
+            self.connect_ortese_btn.setStyleSheet(panel.orthosis_button_style)
+            self.connect_ortese_btn.setEnabled(panel.connect_button_enabled)
+            
         self.record_btn.setEnabled(panel.record_button_enabled)
 
     def _apply_task_view_state(self):
@@ -805,6 +838,8 @@ class StreamingWidget(QWidget):
             self.connect_button_enabled = False
             self.record_button_enabled = False
             self._apply_connection_panel()
+            
+            # 1. EEG
             self.eeg_stream_controller.connect(host, port)
 
             # 2. UDP Unity
@@ -851,6 +886,21 @@ class StreamingWidget(QWidget):
             self._apply_connection_panel()
             self.eeg_stream_controller.disconnect()
         self._refresh_streaming_state()
+
+    def toggle_eeg_connection(self):
+        """Conecta ou desconecta apenas do EEG"""
+        if not self.eeg_stream_controller.is_running():
+            host = self.host_edit.text()
+            port = self.port_spin.value()
+            self.eeg_connection_phase = "connecting"
+            self._apply_connection_panel()
+            self.eeg_stream_controller.connect(host, port)
+        else:
+            self.disconnection_in_progress = True
+            self.eeg_connection_phase = "standby"
+            self._apply_connection_panel()
+            self.eeg_stream_controller.disconnect()
+        self._refresh_streaming_state()
     
     def manual_esp32_test(self, direction):
         """Teste manual do envio serial para ESP32"""
@@ -879,32 +929,24 @@ class StreamingWidget(QWidget):
         """Conecta ou desconecta do ESP32"""
         try:
             if not self.esp32_connected:
+                self.orthosis_connection_phase = "connecting"
+                self._apply_connection_panel()
+                
                 # Tentar conectar
                 connected = self.esp32_controller.connect()
                 
                 if connected:
                     self.esp32_connected = True
                     self.orthosis_connection_phase = "connected"
-                    self.esp32_status_label.setText("ESP32: Conectado (COM4)")
-                    self.esp32_status_label.setStyleSheet("color: green; font-weight: bold;")
-                    self.esp32_toggle_btn.setText("Desconectar ESP32")
-                    self.esp32_toggle_btn.setStyleSheet("background-color: #f44336; color: white; font-weight: bold;")
-                    self.esp32_test_left_btn.setEnabled(True)
-                    self.esp32_test_right_btn.setEnabled(True)
                     QMessageBox.information(self, "Sucesso", "ESP32 conectado com sucesso na COM4!")
                 else:
+                    self.orthosis_connection_phase = "failed"
                     QMessageBox.critical(self, "Erro", "Falha ao conectar ESP32.\nVerifique se o ESP32 está conectado na COM4.")
             else:
                 # Desconectar
                 self.esp32_controller.disconnect()
                 self.esp32_connected = False
                 self.orthosis_connection_phase = "standby"
-                self.esp32_status_label.setText("ESP32: Desconectado")
-                self.esp32_status_label.setStyleSheet("color: red; font-weight: bold;")
-                self.esp32_toggle_btn.setText("Conectar ESP32")
-                self.esp32_toggle_btn.setStyleSheet("background-color: #9C27B0; color: white; font-weight: bold;")
-                self.esp32_test_left_btn.setEnabled(False)
-                self.esp32_test_right_btn.setEnabled(False)
                 QMessageBox.information(self, "Sucesso", "ESP32 desconectado com sucesso!")
                 
         except Exception as e:
@@ -952,6 +994,9 @@ class StreamingWidget(QWidget):
         """Inicia ou para o servidor UDP manualmente (conectado ao botão)."""
         try:
             if not self.udp_server_active:
+                self.unity_connection_phase = "connecting"
+                self._apply_connection_panel()
+                
                 # Tentar iniciar servidor
                 started = False
                 try:
@@ -962,14 +1007,9 @@ class StreamingWidget(QWidget):
                 if started:
                     self.udp_server_active = True
                     self.unity_connection_phase = "connected"
-                    self.udp_status_label.setText("Servidor UDP: Ligado")
-                    self.udp_status_label.setStyleSheet("color: green; font-weight: bold;")
-                    self.udp_toggle_btn.setText("Parar Servidor UDP")
-                    self.udp_toggle_btn.setStyleSheet("background-color: #f44336; color: white; font-weight: bold;")
-                    self.udp_test_left_btn.setEnabled(True)
-                    self.udp_test_right_btn.setEnabled(True)
                     QMessageBox.information(self, "Sucesso", "Servidor UDP iniciado com sucesso!\nBroadcast do IP enviado automaticamente.")
                 else:
+                    self.unity_connection_phase = "failed"
                     QMessageBox.critical(self, "Erro", "Falha ao iniciar servidor UDP")
             else:
                 # Parar servidor
@@ -979,12 +1019,6 @@ class StreamingWidget(QWidget):
                     pass
                 self.udp_server_active = False
                 self.unity_connection_phase = "standby"
-                self.udp_status_label.setText("Servidor UDP: Desligado")
-                self.udp_status_label.setStyleSheet("color: red; font-weight: bold;")
-                self.udp_toggle_btn.setText("Iniciar Servidor UDP")
-                self.udp_toggle_btn.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold;")
-                self.udp_test_left_btn.setEnabled(False)
-                self.udp_test_right_btn.setEnabled(False)
                 QMessageBox.information(self, "Sucesso", "Servidor UDP parado com sucesso!")
         except Exception as e:
             self.unity_connection_phase = "failed"
@@ -1581,6 +1615,18 @@ class StreamingWidget(QWidget):
     
     def on_data_received(self, data):
         """Callback para dados recebidos"""
+        # Confirmar conexão do EEG no primeiro dado recebido
+        if self.eeg_connection_phase == "connecting":
+            if self.eeg_stream_controller.is_mock_mode():
+                self.eeg_connection_phase = "mock"
+            else:
+                self.eeg_connection_phase = "connected"
+            
+            self.record_button_enabled = True
+            self._apply_connection_panel()
+            self._refresh_streaming_state()
+            print(f"[EEG] Conexão confirmada: Primeiro dado recebido ({len(data)} canais)")
+
         # Enviar para plot
         self.plot_widget.add_data(data)
         current_time_seconds = time.time()
@@ -1660,13 +1706,21 @@ class StreamingWidget(QWidget):
                 self.csv_logger.log_data(data)
     
     def on_connection_status(self, connected):
-        """Callback para status da conexão - cores do HTML"""
+        """Callback para status da conexão - agora aguarda o primeiro dado"""
         if connected:
+            # Se for mock, podemos considerar conectado imediatamente se quiser,
+            # mas vamos manter a lógica de esperar dado para ambos para consistência
+            # ou apenas setar como 'connecting' para o real.
             if self.eeg_stream_controller.is_mock_mode():
-                self.eeg_connection_phase = "mock"
+                # No modo mock, como os dados são gerados localmente, 
+                # podemos considerar 'mock' já ou esperar o primeiro dado.
+                # Vamos esperar o dado para garantir que o loop está rodando.
+                if self.eeg_connection_phase != "mock":
+                    self.eeg_connection_phase = "connecting"
             else:
-                self.eeg_connection_phase = "connected"
-            self.record_button_enabled = True
+                self.eeg_connection_phase = "connecting"
+            
+            # Não habilitamos record_btn aqui, esperamos on_data_received
         else:
             self.eeg_connection_phase = (
                 "standby" if self.disconnection_in_progress else "failed"
