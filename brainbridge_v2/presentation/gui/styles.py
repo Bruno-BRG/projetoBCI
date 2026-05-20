@@ -68,6 +68,133 @@ class Theme:
     WARNING_COLOR = ORANGE
     ERROR_COLOR = "#E74C3C"
     INFO_COLOR = LIGHT_BLUE
+    DEV_PURPLE = "#805ad5"
+    SEPARATOR = BTN_BORDER
+
+    @staticmethod
+    def btn_default(padding="7px 18px", font_size="13px", font_weight="600"):
+        return (
+            f"padding: {padding}; font-size: {font_size}; font-weight: {font_weight}; "
+            f"background: {Theme.BTN_BG}; color: {Theme.TEXT_DARK}; "
+            f"border: 1px solid {Theme.BTN_BORDER}; border-radius: 5px;"
+        )
+
+    @staticmethod
+    def btn_green(padding="6px 15px", font_size="13px", font_weight="600"):
+        return (
+            f"padding: {padding}; font-size: {font_size}; font-weight: {font_weight}; "
+            f"background: {Theme.BTN_GREEN}; color: {Theme.WHITE}; "
+            f"border: 1px solid {Theme.BTN_GREEN_HOVER}; border-radius: 5px;"
+        )
+
+    @staticmethod
+    def btn_blue(padding="6px 20px", font_size="13px", font_weight="700"):
+        return (
+            f"padding: {padding}; font-size: {font_size}; font-weight: {font_weight}; "
+            f"background: {Theme.BLUE}; color: {Theme.WHITE}; "
+            f"border: 1px solid {Theme.BLUE_HOVER}; border-radius: 5px;"
+        )
+
+    @staticmethod
+    def btn_dark(padding="6px 20px", font_size="13px", font_weight="700"):
+        return (
+            f"padding: {padding}; font-size: {font_size}; font-weight: {font_weight}; "
+            f"background: {Theme.BTN_DARK}; color: {Theme.WHITE}; "
+            f"border: 1px solid {Theme.BTN_BORDER}; border-radius: 5px;"
+        )
+
+    @staticmethod
+    def btn_recording_active(padding="5px 14px", font_size="12px", font_weight="600"):
+        return (
+            f"padding: {padding}; font-size: {font_size}; font-weight: {font_weight}; "
+            f"background: {Theme.ERROR_COLOR}; color: {Theme.WHITE}; "
+            f"border: 1px solid #c0392b; border-radius: 5px;"
+        )
+
+    @staticmethod
+    def recording_status_label():
+        return (
+            f"color: {Theme.GRAY}; font-size: 12px; font-weight: 600; "
+            "background: transparent; min-width: 88px; max-width: 120px;"
+        )
+
+    @staticmethod
+    def btn_dev(enabled: bool):
+        color = Theme.DEV_PURPLE if enabled else Theme.BTN_DARK
+        return (
+            "padding: 5px 12px; font-size: 12px; font-weight: 700; "
+            f"background: {color}; color: {Theme.WHITE}; "
+            f"border: 1px solid {Theme.BTN_BORDER}; border-radius: 5px;"
+        )
+
+    @staticmethod
+    def panel(background=None):
+        bg = background or Theme.PANEL_BG
+        return f"background-color: {bg};"
+
+    @staticmethod
+    def section_title(font_size="22px"):
+        return (
+            f"color: {Theme.WHITE}; font-size: {font_size}; font-weight: 800; "
+            "background: transparent; border: none;"
+        )
+
+    @staticmethod
+    def field_label():
+        return f"color: {Theme.WHITE}; font-weight: 600; font-size: 9pt; background: transparent;"
+
+    @staticmethod
+    def status_text(state="default"):
+        colors = {
+            "connected": Theme.GREEN,
+            "disconnected": Theme.ORANGE,
+            "off": Theme.GRAY,
+            "error": Theme.ERROR_COLOR,
+            "default": Theme.WHITE,
+        }
+        color = colors.get(state, Theme.WHITE)
+        return f"color: {color}; font-size: 14px; font-weight: 700; background: transparent;"
+
+    @staticmethod
+    def calibration_box():
+        return (
+            f"border: 2px solid {Theme.CALIB_BORDER}; border-radius: 6px; "
+            f"background: {Theme.CALIB_BG};"
+        )
+
+    @staticmethod
+    def marcadores_bar():
+        return (
+            f"background-color: rgba(17, 22, 64, 204); "
+            f"border-top: 2px solid {Theme.BLUE}; border-bottom: 2px solid {Theme.BLUE};"
+        )
+
+    @staticmethod
+    def header_bar():
+        return (
+            f"color: {Theme.WHITE}; background-color: {Theme.PANEL_BG}; "
+            f"padding: 8px 12px; border-radius: 6px; "
+            f"border-bottom: 2px solid {Theme.BLUE};"
+        )
+
+    @staticmethod
+    def patient_form_panel():
+        return (
+            f"background-color: {Theme.PANEL_BG}; border-radius: 8px; "
+            f"border: 1px solid {Theme.BLUE};"
+        )
+
+    @staticmethod
+    def log_console():
+        return (
+            f"background-color: {Theme.SCROLLBAR_TRACK}; color: {Theme.TEXT_LIGHT_GRAY}; "
+            "font-family: Consolas, monospace; font-size: 10px; "
+            f"border: 1px solid {Theme.BTN_BORDER}; border-radius: 4px;"
+        )
+
+    @staticmethod
+    def vertical_separator():
+        return f"background-color: {Theme.SEPARATOR}; max-width: 1px; min-width: 1px;"
 
     @staticmethod
     def get_stylesheet():
@@ -168,13 +295,19 @@ class Theme:
         /* ========== GROUPBOX ========== */
         QGroupBox {{
             color: {Theme.WHITE};
-            border: 2px solid {Theme.BTN_BORDER};
-            border-radius: 6px;
-            margin-top: 10px;
-            padding-top: 8px;
+            border: 1px solid {Theme.BLUE};
+            border-radius: 8px;
+            margin-top: 12px;
+            padding-top: 10px;
             font-weight: bold;
             font-size: 10pt;
-            background-color: {Theme.CALIB_BG};
+            background-color: {Theme.PANEL_BG};
+        }}
+
+        QWidget#patientFormPanel {{
+            background-color: {Theme.PANEL_BG};
+            border-radius: 8px;
+            border: 1px solid {Theme.BLUE};
         }}
 
         QGroupBox::title {{
@@ -189,6 +322,7 @@ class Theme:
             border: 2px solid {Theme.BLUE};
             border-radius: 0 8px 8px 8px;
             background-color: {Theme.PANEL_BG};
+            padding: 4px;
         }}
 
         QTabBar::tab {{
@@ -216,10 +350,15 @@ class Theme:
         QTableWidget {{
             background-color: {Theme.TABLE_BODY_BG};
             alternate-background-color: {Theme.WHITE};
-            gridline-color: {Theme.TABLE_BORDER};
+            gridline-color: transparent;
             border: 1px solid {Theme.TABLE_BORDER};
+            border-radius: 6px;
             font-size: 13px;
             color: {Theme.TEXT_DARK};
+        }}
+
+        QTableWidget::item:hover {{
+            background-color: {Theme.BLUE_TRANS};
         }}
 
         QTableWidget::item {{

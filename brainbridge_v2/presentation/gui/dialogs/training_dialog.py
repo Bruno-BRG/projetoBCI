@@ -12,6 +12,7 @@ from brainbridge_v2.interface_adapters.controllers.training_controller import (
     TrainingController,
 )
 from brainbridge_v2.presentation.gui.training.model_trainer import ModelTrainerThread
+from brainbridge_v2.presentation.gui.styles import Theme
 
 
 class TrainingDialog(QDialog):
@@ -38,22 +39,25 @@ class TrainingDialog(QDialog):
 
         self.setWindowTitle("Treinar Modelo EEG")
         self.resize(500, 420)
+        self.setStyleSheet(Theme.get_stylesheet())
         self._setup_ui()
 
     def _setup_ui(self):
         layout = QVBoxLayout()
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
 
         title = QLabel("Treinar Modelo com Gravação")
-        title.setStyleSheet("font-size: 16px; font-weight: bold; margin-bottom: 10px;")
+        title.setStyleSheet(Theme.section_title("16px"))
         layout.addWidget(title)
 
         info_label = QLabel(f"Paciente: {self.patient_name} (ID: {self.patient_id})")
-        info_label.setStyleSheet("font-size: 12px; margin-bottom: 5px;")
+        info_label.setStyleSheet(f"font-size: 12px; color: {Theme.WHITE};")
         layout.addWidget(info_label)
 
         file_label = QLabel(f"Arquivo: {self.csv_file_path}")
         file_label.setWordWrap(True)
-        file_label.setStyleSheet("font-size: 10px; color: gray; margin-bottom: 12px;")
+        file_label.setStyleSheet(f"font-size: 10px; color: {Theme.GRAY};")
         layout.addWidget(file_label)
 
         self.progress_label = QLabel("Preparando...")
@@ -68,14 +72,14 @@ class TrainingDialog(QDialog):
         self.log_text = QTextEdit()
         self.log_text.setVisible(False)
         self.log_text.setMaximumHeight(160)
-        self.log_text.setStyleSheet("background-color: #f8f8f8; font-family: Consolas, monospace; font-size: 10px;")
+        self.log_text.setStyleSheet(Theme.log_console())
         layout.addWidget(self.log_text)
 
         btns = QHBoxLayout()
         self.cancel_btn = QPushButton("Cancelar")
         self.cancel_btn.clicked.connect(self.reject)
         self.train_btn = QPushButton("Treinar Modelo")
-        self.train_btn.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold; padding: 8px;")
+        self.train_btn.setStyleSheet(Theme.btn_green("8px 20px", "13px", "700"))
         self.train_btn.clicked.connect(self.start_training)
         btns.addWidget(self.cancel_btn)
         btns.addWidget(self.train_btn)
@@ -114,7 +118,7 @@ class TrainingDialog(QDialog):
         self.progress_bar.setValue(1)
         if success:
             self.progress_label.setText("Concluído com sucesso")
-            self.progress_label.setStyleSheet("color: green; font-weight: bold;")
+            self.progress_label.setStyleSheet(Theme.status_text("connected") + " font-size: 13px;")
             QMessageBox.information(self, "Sucesso", message)
             try:
                 self.accept()
@@ -122,7 +126,7 @@ class TrainingDialog(QDialog):
                 pass
         else:
             self.progress_label.setText("Erro durante o treinamento")
-            self.progress_label.setStyleSheet("color: red; font-weight: bold;")
+            self.progress_label.setStyleSheet(Theme.status_text("error") + " font-size: 13px;")
             QMessageBox.critical(self, "Erro", message)
 
         self.log_text.append(message)

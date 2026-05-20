@@ -8,7 +8,7 @@ import importlib
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                            QPushButton, QGroupBox, QComboBox, QGridLayout,
                            QMessageBox, QCheckBox,
-                           QLineEdit, QSpinBox, QDialog, QInputDialog)
+                           QLineEdit, QSpinBox, QDialog, QInputDialog, QFrame)
 from PyQt5.QtCore import pyqtSignal, QTimer, Qt
 from brainbridge_v2.application.game_inference_coordinator import (
     GameInferenceCoordinator,
@@ -78,11 +78,14 @@ class DeveloperSettingsDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Modo Desenvolvedor")
         self.setModal(True)
-        self.resize(360, 140)
+        self.resize(360, 160)
+        self.setStyleSheet(Theme.get_stylesheet())
         layout = QVBoxLayout()
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
 
         title = QLabel("Configurações de Desenvolvimento")
-        title.setStyleSheet("font-size: 15px; font-weight: bold;")
+        title.setStyleSheet(Theme.section_title("15px"))
         layout.addWidget(title)
 
         self.telemetry_checkbox = QCheckBox("Ativar telemetria da IA")
@@ -93,9 +96,7 @@ class DeveloperSettingsDialog(QDialog):
         cancel_btn = QPushButton("Cancelar")
         cancel_btn.clicked.connect(self.reject)
         apply_btn = QPushButton("Aplicar")
-        apply_btn.setStyleSheet(
-            "background-color: #3b5bdb; color: white; font-weight: bold; padding: 6px;"
-        )
+        apply_btn.setStyleSheet(Theme.btn_blue("6px 16px", "13px", "700"))
         apply_btn.clicked.connect(self.accept)
         buttons.addStretch()
         buttons.addWidget(cancel_btn)
@@ -313,37 +314,53 @@ class StreamingWidget(QWidget):
         if hasattr(self, "developer_settings_btn"):
             label = "Dev: On" if self.developer_mode_enabled else "Dev: Off"
             self.developer_settings_btn.setText(label)
-            color = "#805ad5" if self.developer_mode_enabled else "#4a5568"
             self.developer_settings_btn.setStyleSheet(
-                "padding: 5px 12px; font-size: 12px; font-weight: 700; "
-                f"background: {color}; color: #ffffff; border: 1px solid #718096; "
-                "border-radius: 5px;"
+                Theme.btn_dev(self.developer_mode_enabled)
             )
         
-    def setup_ui(self):
-        """Configura a interface pixel-perfect conforme bci_system.html"""
-        # Cores exatas do HTML
-        PANEL_BG = "#111640"
-        BLUE = "#3b5bdb"
-        GREEN = "#48bb78"
-        ORANGE = "#f6ad55"
-        GRAY = "#a0aec0"
-        LIGHT_GRAY = "#e2e8f0"
-        WHITE = "#ffffff"
-        TEXT_DARK = "#1a202c"
+    @staticmethod
+    def _v_separator():
+        line = QFrame()
+        line.setFrameShape(QFrame.VLine)
+        line.setStyleSheet(Theme.vertical_separator())
+        return line
 
+    def setup_ui(self):
+        """Configura a interface conforme bci_system.html (paleta Theme)."""
+        T = Theme
+        task_btn = T.btn_default("8px 20px", "14px", "700")
+        task_btn_jogo = T.btn_default("8px 24px", "14px", "700")
+        calib_btn = T.btn_default("6px 14px", "13px", "600")
+        calib_btn_sm = T.btn_default("6px 14px", "12px", "600")
+        connect_sm = T.btn_green("4px 10px", "11px", "600") + " border-radius: 4px;"
+        combo_style = (
+            f"padding: 4px 8px; font-size: 13px; background: {T.BTN_BG}; color: {T.TEXT_DARK}; "
+            f"border: 1px solid {T.BTN_BORDER}; border-radius: 4px; font-weight: 600;"
+        )
+        patient_title = (
+            f"color: {T.WHITE}; font-size: 22px; font-weight: 800; "
+            "letter-spacing: 0.5px; background: transparent;"
+        )
+        subtitle_18 = f"color: {T.WHITE}; font-size: 18px; font-weight: 800; background: transparent;"
+        subtitle_16 = f"color: {T.WHITE}; font-size: 16px; font-weight: 800; background: transparent;"
+        bci_status = (
+            f"color: {T.GREEN}; font-size: 22px; font-weight: 800; "
+            "letter-spacing: 0.5px; padding: 14px 0 8px 0; background: transparent;"
+        )
+        session_timer = (
+            f"color: {T.WHITE}; font-size: 20px; font-weight: 800; "
+            "letter-spacing: 0.5px; padding: 12px 0 16px 0; background: transparent;"
+        )
 
         layout = QVBoxLayout()
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(0)
 
-        # ============ TOP ROW: streaming-top — grid 1fr 1fr 1fr, padding: 16px 20px 12px 20px ============
-        # Equivalente a: .streaming-top { display: grid; grid-template-columns: 1fr 1fr 1fr; padding: 16px 20px 12px 20px; }
         top_container = QWidget()
-        top_container.setStyleSheet(f"background-color: {PANEL_BG};")
+        top_container.setStyleSheet(T.panel())
         top_layout = QHBoxLayout()
         top_layout.setContentsMargins(20, 16, 20, 12)
-        top_layout.setSpacing(0)
+        top_layout.setSpacing(12)
 
         # ---- COL LEFT: .col-left { flex-direction: column; gap: 10px } ----
         col_left = QVBoxLayout()
@@ -351,7 +368,7 @@ class StreamingWidget(QWidget):
 
         # .patient-label { font-size: 22px; font-weight: 800; letter-spacing: 0.5px }
         self.patient_display_label = QLabel("Paciente: ####")
-        self.patient_display_label.setStyleSheet(f"color: {WHITE}; font-size: 22px; font-weight: 800; letter-spacing: 0.5px;")
+        self.patient_display_label.setStyleSheet(patient_title)
         col_left.addWidget(self.patient_display_label)
 
         # div: display flex, align-items stretch, gap 14px, margin-top 6px
@@ -364,10 +381,10 @@ class StreamingWidget(QWidget):
         task_col.setSpacing(10)
         # button.btn: padding 8px 20px, font-size 14px, font-weight 700, width 100%
         self.btn_baseline = QPushButton("Baseline")
-        self.btn_baseline.setStyleSheet(f"padding: 8px 20px; font-size: 14px; font-weight: 700; background: {LIGHT_GRAY}; color: {TEXT_DARK}; border: 1px solid #4a5568; border-radius: 5px;")
+        self.btn_baseline.setStyleSheet(task_btn)
         self.btn_baseline.clicked.connect(lambda: self._set_task("Baseline"))
         self.btn_jogo = QPushButton("Jogo")
-        self.btn_jogo.setStyleSheet(f"padding: 8px 24px; font-size: 14px; font-weight: 700; background: {LIGHT_GRAY}; color: {TEXT_DARK}; border: 1px solid #4a5568; border-radius: 5px;")
+        self.btn_jogo.setStyleSheet(task_btn_jogo)
         self.btn_jogo.clicked.connect(lambda: self._set_task("Jogo"))
         task_col.addWidget(self.btn_baseline)
         task_col.addWidget(self.btn_jogo)
@@ -376,27 +393,28 @@ class StreamingWidget(QWidget):
         # .calibration-box { border: 2px solid #4a5568; border-radius: 6px; padding: 8px 14px;
         #   flex-direction column; align-items center; gap 6px; background rgba(45,55,72,0.4) }
         calib_frame = QWidget()
-        calib_frame.setStyleSheet(f"border: 2px solid #4a5568; border-radius: 6px; background: rgba(45, 55, 72, 102);")
+        calib_frame.setStyleSheet(T.calibration_box())
         calib_inner = QVBoxLayout()
         calib_inner.setContentsMargins(14, 8, 14, 8)
         calib_inner.setSpacing(6)
         # button.btn: font-size 13px, font-weight 600
         self.btn_iniciar_treino = QPushButton("Iniciar Treino")
-        self.btn_iniciar_treino.setStyleSheet(f"font-size: 13px; font-weight: 600; background: {LIGHT_GRAY}; color: {TEXT_DARK}; border: 1px solid #4a5568; border-radius: 5px; padding: 6px 14px;")
+        self.btn_iniciar_treino.setStyleSheet(calib_btn)
         self.btn_iniciar_treino.clicked.connect(lambda: self._set_task("Treino"))
-        # .calibration-title { font-size: 16px; font-weight: 700 }
         calib_title = QLabel("Calibração")
-        calib_title.setStyleSheet(f"font-size: 16px; font-weight: 700; color: {WHITE}; border: none;")
+        calib_title.setStyleSheet(
+            f"font-size: 16px; font-weight: 700; color: {T.WHITE}; border: none; background: transparent;"
+        )
         calib_title.setAlignment(Qt.AlignCenter)
         # .calibration-btns { display flex; gap 8px }
         calib_btns_row = QHBoxLayout()
         calib_btns_row.setSpacing(8)
         # button.btn: font-size 12px
         self.btn_calib_esq = QPushButton("Esquerda")
-        self.btn_calib_esq.setStyleSheet(f"font-size: 12px; font-weight: 600; background: {LIGHT_GRAY}; color: {TEXT_DARK}; border: 1px solid #4a5568; border-radius: 5px; padding: 6px 14px;")
+        self.btn_calib_esq.setStyleSheet(calib_btn_sm)
         self.btn_calib_esq.clicked.connect(lambda: self.add_marker("T1"))
         self.btn_calib_dir = QPushButton("Direita")
-        self.btn_calib_dir.setStyleSheet(f"font-size: 12px; font-weight: 600; background: {LIGHT_GRAY}; color: {TEXT_DARK}; border: 1px solid #4a5568; border-radius: 5px; padding: 6px 14px;")
+        self.btn_calib_dir.setStyleSheet(calib_btn_sm)
         self.btn_calib_dir.clicked.connect(lambda: self.add_marker("T2"))
         calib_btns_row.addWidget(self.btn_calib_esq)
         calib_btns_row.addWidget(self.btn_calib_dir)
@@ -410,25 +428,25 @@ class StreamingWidget(QWidget):
         col_left.addLayout(left_mid)
         col_left.addStretch()
         top_layout.addLayout(col_left, 1)
+        top_layout.addWidget(self._v_separator())
 
-        # ---- COL CENTER: .col-center { flex-direction column; gap 6px; padding-left 10px } ----
+        # ---- COL CENTER ----
         col_center = QVBoxLayout()
         col_center.setSpacing(6)
         col_center.setContentsMargins(10, 0, 0, 0)
 
         # .status-title { font-size: 22px; font-weight: 800 }
         status_title = QLabel("Status")
-        status_title.setStyleSheet(f"color: {WHITE}; font-size: 22px; font-weight: 800;")
+        status_title.setStyleSheet(T.section_title())
         col_center.addWidget(status_title)
 
-        # button.btn.btn-green: width fit-content, padding 6px 20px, font-size 13px
         self.connect_btn = QPushButton("Conectar")
-        self.connect_btn.setStyleSheet(f"padding: 6px 15px; font-size: 13px; font-weight: 600; background: #38a169; color: {WHITE}; border: 1px solid #2f855a; border-radius: 5px;")
+        self.connect_btn.setStyleSheet(T.btn_green())
         self.connect_btn.clicked.connect(self.toggle_connection)
         col_center.addWidget(self.connect_btn, 0, Qt.AlignLeft)
 
         self.developer_settings_btn = QPushButton("Dev: Off")
-        self.developer_settings_btn.setStyleSheet(f"padding: 5px 12px; font-size: 12px; font-weight: 700; background: #4a5568; color: {WHITE}; border: 1px solid #718096; border-radius: 5px;")
+        self.developer_settings_btn.setStyleSheet(T.btn_dev(False))
         self.developer_settings_btn.clicked.connect(self.open_developer_settings)
         col_center.addWidget(self.developer_settings_btn, 0, Qt.AlignLeft)
 
@@ -439,21 +457,21 @@ class StreamingWidget(QWidget):
         status_grid.setContentsMargins(0, 4, 0, 0)
         
         self.status_eeg = QLabel("EEG - Standby")
-        self.status_eeg.setStyleSheet(f"color: {WHITE}; font-size: 14px; font-weight: 700;")
+        self.status_eeg.setStyleSheet(T.status_text("off"))
         self.connect_eeg_btn = QPushButton("Conectar")
-        self.connect_eeg_btn.setStyleSheet(f"padding: 4px 10px; font-size: 11px; font-weight: 600; background: #38a169; color: {WHITE}; border: 1px solid #2f855a; border-radius: 4px;")
+        self.connect_eeg_btn.setStyleSheet(connect_sm)
         self.connect_eeg_btn.clicked.connect(self.toggle_eeg_connection)
         
         self.status_vr = QLabel("VR - Standby")
-        self.status_vr.setStyleSheet(f"color: {WHITE}; font-size: 14px; font-weight: 700;")
+        self.status_vr.setStyleSheet(T.status_text("off"))
         self.connect_vr_btn = QPushButton("Conectar")
-        self.connect_vr_btn.setStyleSheet(f"padding: 4px 10px; font-size: 11px; font-weight: 600; background: #38a169; color: {WHITE}; border: 1px solid #2f855a; border-radius: 4px;")
+        self.connect_vr_btn.setStyleSheet(connect_sm)
         self.connect_vr_btn.clicked.connect(self.toggle_udp_server)
         
         self.status_ortese = QLabel("ORTESE - Standby")
-        self.status_ortese.setStyleSheet(f"color: {WHITE}; font-size: 14px; font-weight: 700;")
+        self.status_ortese.setStyleSheet(T.status_text("off"))
         self.connect_ortese_btn = QPushButton("Conectar")
-        self.connect_ortese_btn.setStyleSheet(f"padding: 4px 10px; font-size: 11px; font-weight: 600; background: #38a169; color: {WHITE}; border: 1px solid #2f855a; border-radius: 4px;")
+        self.connect_ortese_btn.setStyleSheet(connect_sm)
         self.connect_ortese_btn.clicked.connect(self.toggle_esp32_connection)
         
         status_grid.addWidget(self.status_eeg, 0, 0)
@@ -466,8 +484,9 @@ class StreamingWidget(QWidget):
         col_center.addLayout(status_grid)
         col_center.addStretch()
         top_layout.addLayout(col_center, 1)
+        top_layout.addWidget(self._v_separator())
 
-        # ---- COL RIGHT: .col-right { flex-direction column; gap 8px } ----
+        # ---- COL RIGHT ----
         # Internamente: .right-panel-top { display flex; align-items flex-start; justify-content space-between }
         col_right = QVBoxLayout()
         col_right.setSpacing(8)
@@ -481,7 +500,7 @@ class StreamingWidget(QWidget):
 
         # .gravacao-title { font-size: 18px; font-weight: 800 }
         gravacao_title = QLabel("Gravação")
-        gravacao_title.setStyleSheet(f"color: {WHITE}; font-size: 18px; font-weight: 800;")
+        gravacao_title.setStyleSheet(subtitle_18)
         grav_col.addWidget(gravacao_title)
 
         # .gravacao-row { display flex; align-items center; gap 8px }
@@ -489,11 +508,9 @@ class StreamingWidget(QWidget):
         pac_row.setSpacing(8)
         # .gravacao-label { font-size: 14px; font-weight: 700 }
         pac_label = QLabel("Paciente")
-        pac_label.setStyleSheet(f"color: {WHITE}; font-size: 14px; font-weight: 700;")
-        # .input-paciente { padding 4px 8px; font-size 13px; border 1px solid #4a5568;
-        #   border-radius 4px; background #e2e8f0; color #1a202c; width 70px; font-weight 600 }
+        pac_label.setStyleSheet(T.status_text("default") + " font-size: 14px;")
         self.patient_combo = QComboBox()
-        self.patient_combo.setStyleSheet(f"padding: 4px 8px; font-size: 13px; background: {LIGHT_GRAY}; color: {TEXT_DARK}; border: 1px solid #4a5568; border-radius: 4px; font-weight: 600;")
+        self.patient_combo.setStyleSheet(combo_style)
         self.patient_combo.setMaximumWidth(100)
         self.patient_combo.currentTextChanged.connect(self._on_patient_changed)
         pac_row.addWidget(pac_label)
@@ -502,7 +519,7 @@ class StreamingWidget(QWidget):
 
         # button.btn.btn-atualizar: padding 5px 14px, font-size 12px
         self.refresh_patients_btn = QPushButton("Atualizar")
-        self.refresh_patients_btn.setStyleSheet(f"padding: 5px 14px; font-size: 12px; font-weight: 600; background: {LIGHT_GRAY}; color: {TEXT_DARK}; border: 1px solid #4a5568; border-radius: 5px;")
+        self.refresh_patients_btn.setStyleSheet(T.btn_default("5px 14px", "12px", "600"))
         self.refresh_patients_btn.clicked.connect(self.refresh_patients)
         grav_col.addWidget(self.refresh_patients_btn)
 
@@ -512,12 +529,12 @@ class StreamingWidget(QWidget):
         grav_actions.setContentsMargins(0, 2, 0, 0)
         # button.btn.btn-green: font-size 12px, padding 5px 14px
         self.record_btn = QPushButton("Iniciar Gravação")
-        self.record_btn.setStyleSheet(f"padding: 5px 14px; font-size: 12px; font-weight: 600; background: #38a169; color: {WHITE}; border: 1px solid #2f855a; border-radius: 5px;")
+        self.record_btn.setStyleSheet(T.btn_green("5px 14px", "12px", "600"))
         self.record_btn.clicked.connect(self.toggle_recording)
         self.record_btn.setEnabled(False)
-        # .status-gravacao { font-size: 12px; font-weight: 600; color: #a0aec0 }
-        self.gravacao_status = QLabel("Não Gravando")
-        self.gravacao_status.setStyleSheet(f"color: {GRAY}; font-size: 12px; font-weight: 600;")
+        self.gravacao_status = QLabel("Não gravando")
+        self.gravacao_status.setStyleSheet(Theme.recording_status_label())
+        self.gravacao_status.setWordWrap(False)
         grav_actions.addWidget(self.record_btn)
         grav_actions.addWidget(self.gravacao_status)
         grav_col.addLayout(grav_actions)
@@ -535,10 +552,9 @@ class StreamingWidget(QWidget):
         hands_row.addStretch()
         hand_left = QLabel("✋")
         # .hand-icon.left { color: #f6ad55 }
-        hand_left.setStyleSheet(f"font-size: 32px; color: {ORANGE};")
+        hand_left.setStyleSheet(f"font-size: 32px; color: {T.ORANGE}; background: transparent;")
         hand_right = QLabel("🤚")
-        # .hand-icon.right { color: #63b3ed }
-        hand_right.setStyleSheet(f"font-size: 32px; color: #63b3ed;")
+        hand_right.setStyleSheet(f"font-size: 32px; color: {T.LIGHT_BLUE}; background: transparent;")
         hands_row.addWidget(hand_left)
         hands_row.addWidget(hand_right)
         hands_row.addStretch()
@@ -558,11 +574,23 @@ class StreamingWidget(QWidget):
         ia_table.setColumnMinimumWidth(2, 40)
 
         DOT_INACTIVE = "●"
-        dot_style      = f"color: #2d3748; font-size: 14px;"
-        label_style    = f"color: {WHITE}; font-size: 13px; font-weight: 700; padding: 4px 10px 4px 6px;"
-        acertos_style  = f"color: {ORANGE}; font-size: 13px; font-weight: 800; padding: 4px 10px 4px 6px;"
-        cell_style     = f"font-size: 13px; font-weight: 700; border: 1px solid rgba(74, 85, 104, 0.3); padding: 4px 6px;"
-        val_style      = f"color: {WHITE}; font-size: 18px; font-weight: 800; border: 1px solid rgba(74, 85, 104, 0.3); padding: 4px 6px;"
+        dot_style      = f"color: {T.BTN_DARK}; font-size: 14px; background: transparent;"
+        label_style    = (
+            f"color: {T.WHITE}; font-size: 13px; font-weight: 700; "
+            "padding: 4px 10px 4px 6px; background: transparent;"
+        )
+        acertos_style  = (
+            f"color: {T.ORANGE}; font-size: 13px; font-weight: 800; "
+            "padding: 4px 10px 4px 6px; background: transparent;"
+        )
+        cell_style     = (
+            "font-size: 13px; font-weight: 700; border: 1px solid rgba(74, 85, 104, 0.3); "
+            "padding: 4px 6px; background: transparent;"
+        )
+        val_style      = (
+            f"color: {T.WHITE}; font-size: 18px; font-weight: 800; "
+            "border: 1px solid rgba(74, 85, 104, 0.3); padding: 4px 6px; background: transparent;"
+        )
 
         table_rows = [
             ("IA",       label_style,   DOT_INACTIVE, dot_style + cell_style, DOT_INACTIVE, dot_style + cell_style),
@@ -599,25 +627,25 @@ class StreamingWidget(QWidget):
 
         # ============ MARCADORES BAR ============
         marcadores_bar = QWidget()
-        marcadores_bar.setStyleSheet(f"background-color: rgba(17, 22, 64, 204); border-top: 2px solid {BLUE}; border-bottom: 2px solid {BLUE};")
+        marcadores_bar.setStyleSheet(T.marcadores_bar())
         marc_layout = QHBoxLayout()
-        marc_layout.setContentsMargins(20, 10, 20, 10)
+        marc_layout.setContentsMargins(20, 12, 20, 12)
 
         self.marcador_text = QLabel("Marcadores -  T1: 0  |  T2: 0")
-        self.marcador_text.setStyleSheet(f"color: {WHITE}; font-size: 18px; font-weight: 800;")
+        self.marcador_text.setStyleSheet(subtitle_18)
         marc_layout.addWidget(self.marcador_text)
         marc_layout.addStretch()
 
         teste_label = QLabel("Teste Manual")
-        teste_label.setStyleSheet(f"color: {WHITE}; font-size: 16px; font-weight: 800;")
+        teste_label.setStyleSheet(subtitle_16)
         marc_layout.addWidget(teste_label)
         marc_layout.addSpacing(12)
 
         self.t1_btn = QPushButton("T1")
-        self.t1_btn.setStyleSheet(f"padding: 6px 20px; font-size: 13px; font-weight: 700; background: #4a5568; color: {WHITE}; border: 1px solid #718096; border-radius: 5px;")
+        self.t1_btn.setStyleSheet(T.btn_dark())
         self.t1_btn.clicked.connect(lambda: self.add_marker("T1"))
         self.t2_btn = QPushButton("T2")
-        self.t2_btn.setStyleSheet(f"padding: 6px 20px; font-size: 13px; font-weight: 700; background: {BLUE}; color: {WHITE}; border: 1px solid #364fc7; border-radius: 5px;")
+        self.t2_btn.setStyleSheet(T.btn_blue())
         self.t2_btn.clicked.connect(lambda: self.add_marker("T2"))
         marc_layout.addWidget(self.t1_btn)
         marc_layout.addSpacing(8)
@@ -628,7 +656,7 @@ class StreamingWidget(QWidget):
 
         # ============ BCI STATUS ============
         self.bci_status_label = QLabel("Sistema BCI inicializado")
-        self.bci_status_label.setStyleSheet(f"color: {GREEN}; font-size: 22px; font-weight: 800; letter-spacing: 0.5px; padding: 14px 0 8px 0;")
+        self.bci_status_label.setStyleSheet(bci_status)
         self.bci_status_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.bci_status_label)
 
@@ -639,7 +667,7 @@ class StreamingWidget(QWidget):
 
         # ============ SESSION TIMER ============
         self.session_timer_label = QLabel("Sessão: 00:00:00")
-        self.session_timer_label.setStyleSheet(f"color: {WHITE}; font-size: 20px; font-weight: 800; letter-spacing: 0.5px; padding: 12px 0 16px 0;")
+        self.session_timer_label.setStyleSheet(session_timer)
         self.session_timer_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.session_timer_label)
 
@@ -769,6 +797,28 @@ class StreamingWidget(QWidget):
             self.connect_ortese_btn.setEnabled(panel.connect_button_enabled)
             
         self.record_btn.setEnabled(panel.record_button_enabled)
+
+    def _recording_status_text(self, hint: str = "") -> str:
+        task = self.task_combo.currentText()
+        if not self.is_recording:
+            return "Não gravando"
+        base = "Jogando" if task == "Jogo" else "Gravando"
+        if hint:
+            return f"{base} · {hint}"
+        return base
+
+    def _apply_recording_ui(self, hint: str = ""):
+        """Atualiza botão e texto curto de gravação (sem caminhos de arquivo)."""
+        if not hasattr(self, "record_btn"):
+            return
+        self._apply_task_view_state()
+        if self.is_recording:
+            self.record_btn.setStyleSheet(Theme.btn_recording_active("5px 14px", "12px", "600"))
+        elif self.record_btn.isEnabled():
+            self.record_btn.setStyleSheet(Theme.btn_green("5px 14px", "12px", "600"))
+        if hasattr(self, "gravacao_status"):
+            self.gravacao_status.setText(self._recording_status_text(hint))
+            self.gravacao_status.setStyleSheet(Theme.recording_status_label())
 
     def _apply_task_view_state(self):
         task_view = TaskViewStatePresenter.present(
@@ -961,9 +1011,9 @@ class StreamingWidget(QWidget):
         self.orthosis_connection_phase = "connected" if connected else "standby"
         if not connected and hasattr(self, 'esp32_status_label'):
             self.esp32_status_label.setText("ESP32: Desconectado")
-            self.esp32_status_label.setStyleSheet("color: red; font-weight: bold;")
+            self.esp32_status_label.setStyleSheet(Theme.status_text("error") + " font-size: 12px;")
             self.esp32_toggle_btn.setText("Conectar ESP32")
-            self.esp32_toggle_btn.setStyleSheet("background-color: #9C27B0; color: white; font-weight: bold;")
+            self.esp32_toggle_btn.setStyleSheet(Theme.btn_dev(True))
             self.esp32_test_left_btn.setEnabled(False)
             self.esp32_test_right_btn.setEnabled(False)
         self._apply_connection_panel()
@@ -1091,9 +1141,7 @@ class StreamingWidget(QWidget):
 
                 
                 self.is_recording = True
-                self.update_record_button_text()  # Usar método que considera a tarefa
-                self.recording_label.setText(f"Gravando: {display_path}")
-                self.recording_label.setStyleSheet("color: red; font-weight: bold;")
+                self._apply_recording_ui()
                 
                 # Habilitar botões de marcadores
                 self.t1_btn.setEnabled(True)
@@ -1193,9 +1241,7 @@ class StreamingWidget(QWidget):
             # Resetar contadores de ações
             self.reset_action_counters()
                 
-            self.update_record_button_text()  # Usar método que considera a tarefa
-            self.recording_label.setText("Não gravando")
-            self.recording_label.setStyleSheet("color: gray;")
+            self._apply_recording_ui()
             
             # Desabilitar botões de marcadores
             self.t1_btn.setEnabled(False)
@@ -1372,15 +1418,8 @@ class StreamingWidget(QWidget):
                 # Logger simples
                 marker = self.csv_logger.add_marker(marker_type)
             
-            # Feedback visual
-            task_name = "jogo" if self.task_combo.currentText() == "Jogo" else "gravação"
-            if marker_type == "T1":
-                self.recording_label.setText(f"{'Jogando' if task_name == 'jogo' else 'Gravando'} - Marcador T1 adicionado (T0 em {self.window_size} amostras)")
-            elif marker_type == "T2":
-                self.recording_label.setText(f"{'Jogando' if task_name == 'jogo' else 'Gravando'} - Marcador T2 adicionado (T0 em {self.window_size} amostras)")
-            
-            # Resetar texto após 3 segundos
-            QTimer.singleShot(3000, self.reset_recording_label)
+            self._apply_recording_ui(hint=marker_type)
+            QTimer.singleShot(2000, lambda: self._apply_recording_ui())
     
     def start_baseline(self):
         """Inicia o período de baseline"""
@@ -1407,10 +1446,7 @@ class StreamingWidget(QWidget):
             self.t2_btn.setEnabled(False) 
             # self.baseline_btn.setEnabled(False)  # Botão removido
             
-            # Feedback visual
-            task_name = "jogo" if self.task_combo.currentText() == "Jogo" else "gravação"
-            status_text = "Jogando" if task_name == "jogo" else "Gravando"
-            self.recording_label.setText(f"{status_text} - Baseline iniciado")
+            self._apply_recording_ui(hint="Baseline")
     
     def update_baseline_timer(self):
         """Atualiza o timer de baseline"""
@@ -1423,9 +1459,7 @@ class StreamingWidget(QWidget):
             minutes = remaining // 60
             seconds = remaining % 60
             self.baseline_label.setText(f"Baseline: {minutes:02d}:{seconds:02d}")
-            task_name = "jogo" if self.task_combo.currentText() == "Jogo" else "gravação"
-            status_text = "Jogando" if task_name == "jogo" else "Gravando"
-            self.recording_label.setText(f"{status_text} - Baseline: {minutes:02d}:{seconds:02d}")
+            self._apply_recording_ui(hint=f"{minutes:02d}:{seconds:02d}")
         else:
             # Baseline terminado
             self.baseline_timer.stop()
@@ -1436,29 +1470,12 @@ class StreamingWidget(QWidget):
                 self.t1_btn.setEnabled(True)
                 self.t2_btn.setEnabled(True)
                 # self.baseline_btn.setEnabled(True)  # Botão removido
-                task_name = "jogo" if self.task_combo.currentText() == "Jogo" else "gravação"
-                status_text = "Jogando" if task_name == "jogo" else "Gravando"
-                self.recording_label.setText(f"{status_text} - Baseline finalizado")
+                self._apply_recording_ui()
                 QMessageBox.information(self, "Baseline", "Período de baseline finalizado!")
-                
-                # Resetar texto após 3 segundos
-                QTimer.singleShot(3000, self.reset_recording_label)
-    
+
     def reset_recording_label(self):
-        """Reseta o texto do label de gravação"""
-        if self.is_recording:
-            task_name = "jogo" if self.task_combo.currentText() == "Jogo" else "gravação"
-            status_text = "Jogando" if task_name == "jogo" else "Gravando"
-            
-            if self.csv_logger:
-                if USE_OPENBCI_LOGGER and hasattr(self.csv_logger, 'patient_folder'):
-                    display_path = f"{self.csv_logger.patient_folder}/{self.csv_logger.filename}"
-                else:
-                    display_path = self.csv_logger.filename
-            else:
-                display_path = "arquivo.csv"
-            self.recording_label.setText(f"{status_text}: {display_path}")
-            self.recording_label.setStyleSheet("color: red; font-weight: bold;")
+        """Mantém compatibilidade com timers antigos."""
+        self._apply_recording_ui()
     
     def load_model(self):
         """Carrega modelo CNN para inferência"""
@@ -1754,10 +1771,10 @@ class StreamingWidget(QWidget):
         
         if self.is_recording:
             self.session_timer_label.setText(f"Tempo: {time_str}")
-            self.session_timer_label.setStyleSheet("color: red; font-weight: bold;")
+            self.session_timer_label.setStyleSheet(Theme.status_text("connected") + " font-size: 20px;")
         else:
             self.session_timer_label.setText(f"Tempo: {time_str}")
-            self.session_timer_label.setStyleSheet("color: gray; font-weight: bold;")
+            self.session_timer_label.setStyleSheet(Theme.status_text("off") + " font-size: 20px;")
     
     def on_task_changed(self):
         """Callback chamado quando a tarefa é alterada"""
@@ -1798,7 +1815,7 @@ class StreamingWidget(QWidget):
     
     def update_record_button_text(self):
         """Atualiza o texto do botão de gravação baseado no estado e tarefa"""
-        self._apply_task_view_state()
+        self._apply_recording_ui()
     
     def _on_unity_message(self, message: str):
         """Callback para mensagens recebidas do Unity"""
@@ -1855,8 +1872,7 @@ class StreamingWidget(QWidget):
             dialog.model_ready_signal.connect(self._on_trained_model_ready)
 
             if auto_start:
-                self.recording_label.setText("Treinamento: iniciando...")
-                self.recording_label.setStyleSheet("color: orange; font-weight: bold;")
+                self._apply_recording_ui(hint="Treino")
                 dialog.start_training()
                 dialog.show()
                 try:
@@ -1877,16 +1893,13 @@ class StreamingWidget(QWidget):
             QMessageBox.information(self, "Sucesso", "Gravação de treino finalizada!")
 
     def _on_training_progress(self, message: str):
-        self.recording_label.setText(f"Treinamento: {message}")
-        self.recording_label.setStyleSheet("color: orange; font-weight: bold;")
+        if hasattr(self, "gravacao_status"):
+            short = (message[:24] + "…") if len(message) > 24 else message
+            self.gravacao_status.setText(f"Treino · {short}")
 
     def _on_training_finished(self, success: bool, _message: str):
         self._refresh_streaming_state()
-        self.recording_label.setText("Não gravando")
-        if success:
-            self.recording_label.setStyleSheet("color: gray;")
-        else:
-            self.recording_label.setStyleSheet("color: #f44336; font-weight: bold;")
+        self._apply_recording_ui()
 
     def _on_trained_model_ready(self, model_path: str):
         loaded_model = self.inference_controller.get_loaded_model()

@@ -22,13 +22,14 @@ class PatientRegistrationWidget(QWidget):
         """Configura a interface - Formulário à esquerda, Tabela à direita"""
         # Layout principal horizontal
         main_layout = QHBoxLayout()
-        main_layout.setContentsMargins(10, 10, 10, 10)
-        main_layout.setSpacing(12)
+        main_layout.setContentsMargins(16, 16, 16, 16)
+        main_layout.setSpacing(14)
         
-        # ========== PAINEL ESQUERDO - FORMULÁRIO ==========
         left_panel = QWidget()
+        left_panel.setObjectName("patientFormPanel")
+        left_panel.setStyleSheet(Theme.patient_form_panel())
         left_layout = QVBoxLayout(left_panel)
-        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setContentsMargins(12, 12, 12, 12)
         left_layout.setSpacing(8)
         
         # Formulário de cadastro
@@ -38,8 +39,7 @@ class PatientRegistrationWidget(QWidget):
         form_layout.setSpacing(10)
         form_layout.setContentsMargins(12, 16, 12, 12)
         
-        # Estilos para labels
-        label_style = f"color: {Theme.PRIMARY_DARK_GREEN}; font-weight: bold; font-size: 9pt;"
+        label_style = Theme.field_label()
         
         # Campo: Nome Completo
         name_label = QLabel("Nome Completo:")
@@ -123,7 +123,8 @@ class PatientRegistrationWidget(QWidget):
         # Botão de cadastro
         self.register_btn = QPushButton("✓ Cadastrar Paciente")
         self.register_btn.setMinimumHeight(36)
-        self.register_btn.setFont(QFont("Arial", 10, QFont.Bold))
+        self.register_btn.setFont(QFont("Segoe UI", 10, QFont.Bold))
+        self.register_btn.setStyleSheet(Theme.btn_green("8px 20px", "13px", "700"))
         self.register_btn.clicked.connect(self.register_patient)
         form_layout.addWidget(self.register_btn)
         
@@ -155,6 +156,7 @@ class PatientRegistrationWidget(QWidget):
         ])
         self.patients_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.patients_table.setAlternatingRowColors(True)
+        self.patients_table.setShowGrid(False)
         
         # Configurar header para expandir colunas
         header = self.patients_table.horizontalHeader()
